@@ -1,0 +1,38 @@
+
+   e:
+   cd pro
+   git clone --recursive https://github.com/obsproject/obs-plugintemplate.git
+   ren obs-plugintemplate obs-evs-pcie-win-io
+   Launch vscode
+   rmdir /S .git
+   open folder E:\pro\obs-evs-pcie-win-io
+   open buildspec.json and change:
+		"name": "obs-evs-pcie-win-io",
+		"displayName": "Plugin evs-pcie-win-io board",
+		"version": "1.0.0",
+		"author": "onbings@gmail.com",
+		"website": "https://github.com/onbings",
+		"email": "onbings@gmail.com"
+   Quit vscode		
+   cd obs-evs-pcie-win-io
+   cmake --list-presets
+   cmake --preset windows-x64: download obs-studio, qt6,dshow...
+   
+   
+   Launch Microsoft Visual Studio 2022 community edition
+   open project: E:\pro\obs-evs-pcie-win-io\build_x64\obs-evs-pcie-win-io.sln
+   
+   Or use visual code with cmake plugin.
+   
+   Create en-US.ini in E:\pro\obs-studio\build_x64\rundir\Debug\data\obs-plugins\obs-evs-pcie-win-io\locale with at least one line: Bha="bha"
+   Copy E:\pro\obs-evs-pcie-win-io\build_x64\rundir\RelWithDebInfo\obs-evs-pcie-win-io.dll to E:\pro\obs-studio\build_x64\rundir\Debug\obs-plugins\64bit\obs-evs-pcie-win-io.dll
+   Copy E:\pro\obs-evs-pcie-win-io\build_x64\rundir\RelWithDebInfo\obs-evs-pcie-win-io.pdb to E:\pro\obs-studio\build_x64\rundir\Debug\obs-plugins\64bit\obs-evs-pcie-win-io.pdb
+   Launch obs studio, select Help - Show log file, you should see:
+   15:52:05.824: [obs-evs-pcie-win-io] plugin loaded successfully (version 1.0.0)
+   ...
+   15:52:06.291:   Loaded Modules:
+   ...
+   15:52:06.293:     obs-evs-pcie-win-io.dll
+   
+   doc obs: https://docs.obsproject.com/
+   forum obs: https://obsproject.com/forum/plugins/

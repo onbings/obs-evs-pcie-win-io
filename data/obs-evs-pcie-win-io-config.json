@@ -1,0 +1,17 @@
+{
+  "Verbose": 1,
+  "SnapshotMode": 0,
+  "AncStreamPresent": 0,
+  "NoSave": 1,
+  "HwInitAlreadyDone": 0,
+  "BoardNumber": 0,
+  "PcieBufferingSize": 0,
+  "UhdPcieBufferingSize": 0,
+  "PlayerNumber": 0,
+  "RecorderNumber": 0,
+  "TimeToRunInSec": 0,
+  "NbToPreload": 30,
+  "VideoStandard": "1080i_59_94",
+  "AudioChannelMask": 192,
+  "BaseDirectory": "C:/media/win_io_board/"
+}

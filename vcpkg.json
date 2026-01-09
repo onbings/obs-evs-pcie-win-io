@@ -1,0 +1,16 @@
+{
+  "name": "obs-evs-pcie-win-io",
+  "version": "1.0.0",
+  "description": "The obs plugin for evs-pcie-win-io",
+  "dependencies": [
+    {
+      "name": "nlohmann-json"
+    },
+    {
+      "name": "pthreads"
+    },
+    {
+      "name": "bofstd"
+    }
+  ]
+}

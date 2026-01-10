@@ -4,8 +4,6 @@
 #include <libevs-pcie-win-io-api/src/EvsPcieIoApi.h>
 #include <libevs-pcie-win-io-api/src/private/BaseAccess.h>
 #include <libevs-pcie-win-io-api/src/EvsPcieIoHelpers.h>
-//#include <libevs-win-hwlgpl/src/VseLogger_exp.h>
-//#include <libevs-win-hwlgpl/src/lin_to_win.h>
 
 #define container_of(ptr, type, member) (reinterpret_cast<type *>(reinterpret_cast<char *>(ptr) - offsetof(type, member)))
 

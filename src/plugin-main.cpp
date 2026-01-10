@@ -15,14 +15,20 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along
 with this program. If not, see <https://www.gnu.org/licenses/>
 */
-
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <nlohmann/json.hpp>
 #include <obs-module.h>
 #include <plugin-support.h>
 #include <BoardResourceManager.h>
 #include <fstream>
 #include "SimpleRecorder.h"
+#include "vectorclass.h"
+#include <libevs-pcie-win-io-api/src/EvsPcieIoHelpers.h>
+
+#define IN10BITS
 extern struct obs_source_info raw_10bit_info;
+extern struct obs_source_info udp_stream_filter_info;
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 static std::map<std::string, EVS::EvsPcieIoApi::eVideoStandard> S_VideoStandardCollection = {
@@ -248,6 +254,191 @@ void fill_uyvy_color_bars(uint8_t *buffer, int width, int height)
     }
   }
 }
+//Transforming v210 (10-bit 4:2:2) to UYVY (8-bit 4:2:2) 
+uint32_t v210_to_uyvy_avx2_vcl(const uint32_t *src, uint8_t *dst, int width, int height)
+{
+  int total_dwords = (width + 5) / 6 * 4 * height;
+  uint8_t *original_dst = dst;
+  // Process 8 DWORDs (12 pixels) at a time
+  for (int i = 0; i <= total_dwords - 8; i += 8)
+  {
+    // Load 8 DWORDs (256 bits)
+    Vec8ui w = Vec8ui().load(src + i);
+
+    // We need to extract 10-bit components and shift to 8-bit
+    // Component 0: [9:0]   -> bits 2-9
+    // Component 1: [19:10] -> bits 12-19
+    // Component 2: [29:20] -> bits 22-29
+
+    // Extract and shift down to 8-bit
+    Vec8ui c0 = (w >> 2) & 0xFF;
+    Vec8ui c1 = (w >> 12) & 0xFF;
+    Vec8ui c2 = (w >> 22) & 0xFF;
+
+    // Now we must interleave these into UYVY order
+    // This requires custom shuffling since v210 is non-linear across words
+    // Below is the logical mapping for the first 4 DWORDS (6 pixels):
+    // Word 0: U0(c0), Y0(c1), V0(c2)
+    // Word 1: Y1(c0), U1(c1), Y2(c2)
+    // Word 2: V1(c0), Y3(c1), U2(c2)
+    // Word 3: Y4(c0), V2(c1), Y5(c2)
+
+    // For high performance, we use a Permute/Shuffle to align bytes.
+    // To simplify, we'll store the extracted bytes into a temporary buffer
+    // and let the compiler's auto-vectorizer optimize the final pack.
+    alignas(32) uint32_t b0[8], b1[8], b2[8];
+    c0.store(b0);
+    c1.store(b1);
+    c2.store(b2);
+
+    // Manual packing of the 12 pixels (24 bytes) from the 8 DWORDs
+    // This loop handles the "un-packing" of the v210 structure
+    for (int j = 0; j < 8; j += 4)
+    {
+      // Pixel Group (6 pixels)
+      *dst++ = (uint8_t)b0[j];     // U0
+      *dst++ = (uint8_t)b1[j];     // Y0
+      *dst++ = (uint8_t)b2[j];     // V0
+      *dst++ = (uint8_t)b0[j + 1]; // Y1
+      *dst++ = (uint8_t)b1[j + 1]; // U1
+      *dst++ = (uint8_t)b2[j + 1]; // Y2
+      *dst++ = (uint8_t)b0[j + 2]; // V1
+      *dst++ = (uint8_t)b1[j + 2]; // Y3
+      *dst++ = (uint8_t)b2[j + 2]; // U2
+      *dst++ = (uint8_t)b0[j + 3]; // Y4
+      *dst++ = (uint8_t)b1[j + 3]; // V2
+      *dst++ = (uint8_t)b2[j + 3]; // Y5
+    }
+  }
+  return static_cast<uint32_t>(dst - original_dst);
+}
+
+// Optimized v210 to UYVY converter using AVX2
+// Returns the size of the processed buffer in bytes.
+uint32_t v210_to_uyvy_avx2_opt(const uint32_t *__restrict src, uint8_t *__restrict dst, int width, int height)
+{
+  // Total 32-bit words to process
+  // v210 packs 6 pixels into 4 words (128 bits).
+  int total_dwords = (width + 5) / 6 * 4 * height;
+  uint8_t *original_dst = dst;
+
+  // Constants for bit manipulation
+  // We shift right to align the 10-bit MSBs to the 8-bit output positions
+  // R0 (Comp 0): (Word >> 2) & 0xFF
+  // R1 (Comp 1): (Word >> 12) & 0xFF -> We shift >> 4 and mask 0xFF00
+  // R2 (Comp 2): (Word >> 22) & 0xFF -> We shift >> 6 and mask 0xFF0000
+  const __m256i mask_comp0 = _mm256_set1_epi32(0x000000FF);
+  const __m256i mask_comp1 = _mm256_set1_epi32(0x0000FF00);
+  const __m256i mask_comp2 = _mm256_set1_epi32(0x00FF0000);
+
+  // Shuffle Mask: Rearrange bytes from 32-bit words into UYVY stream
+  // Input Word Layout (Little Endian): [00 V0 Y0 U0]
+  // We want to extract bytes at indices 0,1,2 (Word0), 4,5,6 (Word1), etc.
+  // -1 denotes zeroing out the remaining bytes (padding)
+  const __m256i shuffle_mask = _mm256_setr_epi8(0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, -1, -1, -1, -1, // Lane 0
+                                                0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, -1, -1, -1, -1  // Lane 1 (Same relative pattern)
+  );
+
+  int i = 0;
+  // Main Loop: Process 8 DWORDs (2 blocks, 12 pixels, 24 bytes output) per iteration
+  for (; i <= total_dwords - 8; i += 8)
+  {
+    // 1. Load 256 bits (8 DWORDs)
+    __m256i w = _mm256_loadu_si256((const __m256i *)(src + i));
+
+    // 2. Extract Components
+    // Instead of shifting each component down to 0-255 and then shifting back up
+    // to combine them, we shift them directly to their target byte slot in the 32-bit word.
+    __m256i c0 = _mm256_and_si256(_mm256_srli_epi32(w, 2), mask_comp0); // 0x000000UU
+    __m256i c1 = _mm256_and_si256(_mm256_srli_epi32(w, 4), mask_comp1); // 0x0000YY00
+    __m256i c2 = _mm256_and_si256(_mm256_srli_epi32(w, 6), mask_comp2); // 0x00VV0000
+
+    // 3. Combine into packed 32-bit words: 0x00VVYYUU
+    __m256i packed = _mm256_or_si256(c0, _mm256_or_si256(c1, c2));
+
+    // 4. Compact the valid bytes (remove the 0x00 high byte from every word)
+    // Result per 128-bit lane: [Garbage][Valid 12 Bytes] (Little Endian)
+    __m256i uyvy = _mm256_shuffle_epi8(packed, shuffle_mask);
+
+    // 5. Store Result using Overlapping Stores (Faster than masking)
+    // We have 24 bytes of valid data total (12 in lower lane, 12 in upper lane).
+
+    // Store Lower Lane (16 bytes written, valid bytes 0-11)
+    _mm_storeu_si128((__m128i *)dst, _mm256_castsi256_si128(uyvy));
+
+    // Store Upper Lane (16 bytes written, valid bytes 12-23)
+    // We write to offset 12. This overwrites the 4 bytes of garbage from the previous store
+    // with the correct data from the start of this lane.
+    _mm_storeu_si128((__m128i *)(dst + 12), _mm256_extracti128_si256(uyvy, 1));
+
+    dst += 24;
+  }
+
+  // Scalar Fallback for remaining items (v210 is usually block aligned to 4 words)
+  // There will be at most 1 block (4 words) remaining.
+  /*
+  you can remove the scalar fallback, but you must ensure your input dimensions meet specific alignment requirements.
+
+Condition 1: The "Safe Delete" (Width Alignment)
+You can simply delete the scalar loop if you guarantee that your image width is a multiple of 12 pixels.
+
+Why?
+
+v210 stores pixels in "blocks" of 6 pixels (128 bits / 4 words).
+
+Your AVX2 loop processes 2 blocks at a time (12 pixels / 8 words).
+
+Standard resolutions like 1920x1080, 1280x720, and 3840x2160 are all multiples of 12.
+
+If your width is standard, total_dwords is always divisible by 8, so the scalar loop is unreachable code.
+
+Condition 2: The "Vectorized Tail" (Handling Odd Blocks)
+If you have weird widths (e.g., a width that is a multiple of 6 but not 12), you might have one block (4 words) left over at the end
+  */
+  for (; i < total_dwords; i++)
+  {
+    uint32_t val = src[i];
+    // Decode 10-bit values
+    uint8_t u = (val >> 2) & 0xFF;
+    uint8_t y = (val >> 12) & 0xFF;
+    uint8_t v = (val >> 22) & 0xFF;
+
+    // Map v210 words to UYVY sequence
+    // The pattern repeats every 4 words.
+    int word_idx = i % 4;
+
+    if (word_idx == 0)
+    { // U0, Y0, V0
+      dst[0] = u;
+      dst[1] = y;
+      dst[2] = v;
+      dst += 3;
+    }
+    else if (word_idx == 1)
+    { // Y1, U1, Y2
+      dst[0] = u;
+      dst[1] = y;
+      dst[2] = v; // Note: Logic inputs are effectively Y, U, Y here
+      dst += 3;
+    }
+    else if (word_idx == 2)
+    { // V1, Y3, U2
+      dst[0] = u;
+      dst[1] = y;
+      dst[2] = v;
+      dst += 3;
+    }
+    else
+    { // Y4, V2, Y5
+      dst[0] = u;
+      dst[1] = y;
+      dst[2] = v;
+      dst += 3;
+    }
+  }
+
+  return static_cast<uint32_t>(dst - original_dst);
+}
 int TestRecorder()
 {
   int Rts_i;
@@ -307,7 +498,10 @@ std::unique_ptr<BoardResourceManager> GL_puBoardResourceManager = nullptr;
 extern "C" bool obs_module_load(void)
 {
   bool Rts_B = false;
-  obs_log(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
+  WSADATA wsa;
+
+  obs_log(LOG_INFO, "Plugin loaded successfully (version %s)", PLUGIN_VERSION);
+  obs_log(LOG_INFO, "2222");
   
   GL_pObsLogger = new CObsLogger();
   GL_pEvsPcieWinIoLogger = new EvsHwLGPL::CMsgLogger(GL_pObsLogger, 512);
@@ -331,10 +525,20 @@ extern "C" bool obs_module_load(void)
     obs_log(LOG_INFO, "create BoardResourceManager for board %d: %p", GL_CliArg_X.BoardNumber_U32, GL_puBoardResourceManager.get());
     if (GL_puBoardResourceManager)
     {
-      Rts_B = true;
+      obs_log(LOG_INFO, "Initialize winsock");
+      if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+      {
+        obs_log(LOG_ERROR, "WSAStartup failed");
+      }
+      else
+      {
+        Rts_B = true;
+      }
     }
   }
+
   obs_register_source(&raw_10bit_info);
+  obs_register_source(&udp_stream_filter_info);
   obs_log(LOG_INFO, "obs_module_load returns %s", Rts_B ? "true" : "false");
   //ADD_MESSAGE(EvsHwLGPL::SEV_INFO, "hello world\n");
   return Rts_B;
@@ -358,14 +562,10 @@ extern "C" void obs_module_unload(void)
   {
     GL_puBoardResourceManager.reset();
   }
+  WSACleanup();
 }
 
 
-
-#include <obs-module.h>
-#include <cstdio>
-#include <chrono>
-#include <thread>
 
 struct raw_10bit_source
 {
@@ -376,9 +576,16 @@ struct raw_10bit_source
   uint32_t fps;
   size_t frame_size;
   uint64_t frame_count;
-
+  gs_texture_t *texture;
   // Buffer for one frame
   uint8_t *buffer;
+};
+struct udp_stream_filter
+{
+  obs_source_t *source;
+  SOCKET sock;
+  struct sockaddr_in dest;
+  bool started;
 };
 constexpr const char *PLUGIN_INPUT_NAME = "obs-evs-pcie-win-io source";
 
@@ -396,25 +603,39 @@ static void *raw_create(obs_data_t *settings, obs_source_t *source)
   context->source = source;
 
   // Hardcoded for your specific use case, or pull from settings
-  //context->width = 1920;
-  //context->height = 1080;
+#if defined(IN10BITS)  
+  context->width = 1920;
+  context->height = 1080;
+  context->fps = 30;
+#else
   context->width = 640;
   context->height = 480;
   context->fps = 60;
+#endif
 
-  // P010 format: Y plane (2 bytes/pixel) + UV plane (1 byte/pixel avg) = 3 bytes total per pixel
-//  context->frame_size = context->width * context->height * 3;
+#if defined(IN10BITS)
+  context->frame_size =
+      EVS::EvsPcieIoApi::CEvsPcieIoApiHelper::ComputeImageSize(EVS::EvsPcieIoApi::VideoStd_1080p_59_94, FOURCC_V210, context->width, context->height, false);
+//  EVS::EvsPcieIoApi::CEvsPcieIoApiHelper::ComputeImageSize(EVS::EvsPcieIoApi::VideoStd_1080i_59_94, FOURCC_V210, context->width, context->height, false);
+#else
   context->frame_size = context->width * context->height * 2;
-  context->buffer = (uint8_t *)bmalloc(context->frame_size);
   fill_uyvy_color_bars(context->buffer, context->width, context->height);
+#endif
+  context->buffer = (uint8_t *)bmalloc(context->frame_size);
+  // Create texture
+  obs_enter_graphics();
+  context->texture = gs_texture_create(context->width, context->height, GS_BGRA, 1, NULL, GS_DYNAMIC);
+  obs_leave_graphics();
 
   const char *p = obs_data_get_string(settings, "file_path");
   obs_log(LOG_INFO, ">>>raw_create obs_data_get_string '%s'", p);
 
   char path[512];
-//  sprintf(path, "%s1920x1080@29.97i_clp_0.yuv10", GL_CliArg_X.BaseDirectory_S.c_str());
+#if defined(IN10BITS)
+  sprintf(path, "%s1920x1080@29.97i_clp_0.yuv10", GL_CliArg_X.BaseDirectory_S.c_str());
+#else
   sprintf(path, "%s640x480@59.94p_clp_0.yuv8", GL_CliArg_X.BaseDirectory_S.c_str());
-  
+#endif  
   context->file = fopen(path, "rb");
   obs_log(LOG_INFO, ">>>raw_create '%s' %p", path, context->file);
 
@@ -425,7 +646,14 @@ static void *raw_create(obs_data_t *settings, obs_source_t *source)
 static void raw_destroy(void *data)
 {
   auto *context = (raw_10bit_source *)data;
+
   obs_log(LOG_INFO, ">>>raw_destroy %p", context->file);
+  obs_enter_graphics();
+  if (context->texture)
+  {
+    gs_texture_destroy(context->texture);
+  }
+  obs_leave_graphics();
   if (context->file)
   {
     fclose(context->file);
@@ -444,21 +672,27 @@ static void raw_video_tick(void *data, float seconds)
   }
 
   // Read one frame
-#if 0
   size_t read = fread(context->buffer, 1, context->frame_size, context->file);
   // Loop file if EOF
   if (read < context->frame_size)
   {
     fseek(context->file, 0, SEEK_SET);
-    obs_log(LOG_INFO, ">>>raw_video_tick %p sz %d not enought", context->file, read);
-
+    //obs_log(LOG_INFO, ">>>raw_video_tick %p sz %d not enought", context->file, read);
     return;
   }
+#if defined(IN10BITS)
+  auto t1 = std::chrono::high_resolution_clock::now();
+  // Convert v210 to UYVY
+  v210_to_uyvy_avx2_vcl((const uint32_t *)context->buffer, context->buffer, context->width, context->height);
+//  v210_to_uyvy_avx2_opt((const uint32_t *)context->buffer, context->buffer, context->width, context->height);
+  auto t2 = std::chrono::high_resolution_clock::now();
+
 #endif
-  struct obs_source_frame frame = {};
+  //struct obs_source_frame frame = {0};
+  struct obs_source_frame2 frame = {0};
   frame.width = context->width;
   frame.height = context->height;
-  frame.format = VIDEO_FORMAT_UYVY;   //VIDEO_FORMAT_P010;
+  frame.format = VIDEO_FORMAT_UYVY; // VIDEO_FORMAT_P010;
 
   // P010 is semi-planar: Y in plane 0, interleaved UV in plane 1
 //  frame.data[0] = context->buffer;
@@ -471,12 +705,32 @@ static void raw_video_tick(void *data, float seconds)
 
   // Timing using std::chrono
   auto duration = std::chrono::nanoseconds(1000000000 / context->fps);
-  frame.timestamp = context->frame_count * duration.count();
+  //frame.timestamp = context->frame_count * duration.count();
+  frame.timestamp = obs_get_video_frame_time();
 
-  obs_source_output_video(context->source, &frame);
+  //obs_source_output_video(context->source, &frame);
+  // Use obs_source_output_video2 which is the new standard
+
+  // Color Information
+  frame.trc = VIDEO_TRC_SRGB;  //For 10 ,bits frame.trc = VIDEO_TRC_PQ; or VIDEO_TRC_HLG; for HDR.
+  frame.range = VIDEO_RANGE_PARTIAL;
+  // Color setup - This fills color_matrix, color_range_min, and color_range_max
+  video_format_get_parameters(VIDEO_CS_709, VIDEO_RANGE_PARTIAL, frame.color_matrix, frame.color_range_min, frame.color_range_max);
+
+  frame.timestamp = obs_get_video_frame_time();
+  //frame.flip = false; // Set to true only if the image appears upside down in OBS
+  obs_source_output_video2(context->source, &frame);
+
   context->frame_count++;
+#if defined(IN10BITS)
+  auto t3 = std::chrono::high_resolution_clock::now();
+  auto duration_conversion = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count();
+  obs_log(LOG_INFO, ">>>raw_video_tick v210_to_uyvy_avx2_vcl took %lld us", duration_conversion);
+  auto duration_output = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
+  obs_log(LOG_INFO, ">>>raw_video_tick obs_source_output_video2 to end took %lld us", duration_output);
+#endif
  // obs_log(LOG_INFO, ">>>raw_video_tick %p sz %d cnt %d ts %ld", context->file, read, context->frame_count, frame.timestamp);
-  obs_log(LOG_INFO, ">>>raw_video_tick %p cnt %d ts %ld", context->file, context->frame_count, frame.timestamp);
+  //obs_log(LOG_INFO, ">>>raw_video_tick %p cnt %d ts %ld", context->file, context->frame_count, frame.timestamp);
 }
 static obs_properties_t *raw_get_properties(void *data)
 {
@@ -488,17 +742,233 @@ static obs_properties_t *raw_get_properties(void *data)
 
   return props;
 }
+static void raw_video_render(void *data, gs_effect_t *effect)
+{
+  auto *context = (raw_10bit_source *)data;
+  //UNUSED_PARAMETER(context);
+  obs_log(LOG_INFO, ">>>raw_video_render");
+  effect = obs_get_base_effect(OBS_EFFECT_SOLID);
+
+  gs_effect_set_color(gs_effect_get_param_by_name(effect, "color"), 0xFFFF0000);
+
+  while (gs_effect_loop(effect, "Solid"))
+  { 
+    gs_draw_sprite(NULL, 0, context->width, context->height);
+  }
+}
 // 5. Register the Source Info
+/*
+OBS_SOURCE_CUSTOM_DRAW
+
+Used for sources that render directly using graphics API calls (OpenGL/Direct3D)
+You control the rendering in video_render() callback
+You draw using textures, shaders, sprites, etc.
+Rendering happens synchronously with OBS's render loop
+Example: Your original red background drawing with gs_draw_sprite()
+
+OBS_SOURCE_ASYNC
+
+Used for sources that provide video frames as data
+You push frames using obs_source_output_video()
+OBS handles the frame -> texture -> rendering pipeline internally
+Frames are timestamped and processed asynchronously
+Example: Webcams, capture cards, media sources with video files
+*/
 struct obs_source_info raw_10bit_info = {
     .id = PLUGIN_INPUT_NAME, //"obs-evs-pcie-win-io source",
     .type = OBS_SOURCE_TYPE_INPUT,
-    .output_flags = OBS_SOURCE_VIDEO,
+    //.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW,
+    .output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_ASYNC,
     .get_name = raw_get_name,
     .create = raw_create,
     .destroy = raw_destroy,
     .get_width = [](void *data) { return ((raw_10bit_source *)data)->width; },
     .get_height = [](void *data) { return ((raw_10bit_source *)data)->height; },
-    .video_tick = raw_video_tick,
+    //.video_render = raw_video_render,  //OBS_SOURCE_CUSTOM_DRAW
+    .video_tick = raw_video_tick,       //OBS_SOURCE_ASYNC
 };
 
+static const char *udp_filter_get_name(void *unused)
+{
+  UNUSED_PARAMETER(unused);
+  return "UYVY UDP Streamer (127.0.0.1:5000)";
+}
 
+static void *udp_filter_create(obs_data_t *settings, obs_source_t *source)
+{
+  UNUSED_PARAMETER(settings);
+  obs_log(LOG_INFO, ">>>udp_filter_create");
+  auto *ctx = (udp_stream_filter *)bzalloc(sizeof(udp_stream_filter));
+  ctx->source = source;
+  ctx->sock = INVALID_SOCKET;
+  ctx->started = false;
+
+  ctx->sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (ctx->sock == INVALID_SOCKET)
+  {
+    obs_log(LOG_ERROR, "udp_filter_create: socket() failed");
+  }
+  else
+  {
+    memset(&ctx->dest, 0, sizeof(ctx->dest));
+    ctx->dest.sin_family = AF_INET;
+    ctx->dest.sin_port = htons(5000);
+    //ctx->dest.sin_addr.s_addr = inet_addr("127.0.0.1");
+    if (inet_pton(AF_INET, "127.0.0.1", &ctx->dest.sin_addr) != 1)
+    {
+      obs_log(LOG_ERROR, "udp_filter_create: inet_pton failed");
+    }
+    else
+    {
+      ctx->started = true;
+    }
+    obs_log(LOG_INFO, "udp_filter_create: UDP socket ready to 127.0.0.1:5000");
+  }
+  return ctx;
+}
+
+static void udp_filter_destroy(void *data)
+{
+  auto *ctx = (udp_stream_filter *)data;
+  obs_log(LOG_INFO, ">>>udp_filter_destroy");
+  if (!ctx)
+  {
+    return;
+  }
+
+  if (ctx->sock != INVALID_SOCKET)
+  {
+    closesocket(ctx->sock);
+    ctx->sock = INVALID_SOCKET;
+  }
+  if (ctx->started)
+  {
+    ctx->started = false;
+  }
+  bfree(ctx);
+}
+
+static obs_properties_t *udp_filter_properties(void *data)
+{
+  UNUSED_PARAMETER(data);
+  obs_properties_t *props = obs_properties_create();
+  // Minimal: no configurable properties for now
+  return props;
+}
+
+// This callback receives frames from the attached source.
+// The OBS filter callback name used here is `filter_video` (OBS expects this member for filters).
+static struct obs_source_frame *udp_filter_video(void *data, struct obs_source_frame *frame)
+{
+  auto *ctx = (udp_stream_filter *)data;
+  obs_log(LOG_INFO, ">>>udp_filter_video");
+  if (!ctx || !ctx->started || !frame)
+  {
+    return frame;
+  }
+
+  // Only forward UYVY frames
+  if (frame->format != VIDEO_FORMAT_UYVY)
+  {
+    // Drop non-UYVY but still pass the frame through
+    return frame;
+  }
+
+  // Compute contiguous byte size for plane 0 (UYVY is packed: 2 bytes per pixel)
+  size_t bytes = (size_t)frame->linesize[0] * (size_t)frame->height;
+  if (bytes > 0xF000)
+  {
+    obs_log(LOG_WARNING, "udp_filter_video: frame size too large (%zu bytes), clipping", bytes);
+    bytes = 0xF000;
+  }
+  const char *buf = reinterpret_cast<const char *>(frame->data[0]);
+
+  int sent = sendto(ctx->sock, buf, static_cast<int>(bytes), 0, reinterpret_cast<struct sockaddr *>(&ctx->dest), static_cast<int>(sizeof(ctx->dest)));
+  if (sent == SOCKET_ERROR)
+  {
+    obs_log(LOG_WARNING, "udp_filter_video: sendto failed (%d)", WSAGetLastError());
+  }
+
+  return frame;
+}
+
+// Register filter info (append this declaration somewhere near the other obs_source_info structs)
+static struct obs_source_info udp_stream_filter_info = {
+    .id = "uyvy_udp_stream_filter",
+    .type = OBS_SOURCE_TYPE_FILTER,
+    .output_flags = OBS_SOURCE_VIDEO,
+    .get_name = udp_filter_get_name,
+    .create = udp_filter_create,
+    .destroy = udp_filter_destroy,
+    .get_properties = udp_filter_properties,
+    .filter_video = udp_filter_video,
+};
+/*
+show me how to do  Texture Sharing (GPU-to-GPU)
+
+To implement Texture Sharing (Zero-Copy), you must shift from an "Asynchronous" source (pushing raw pixels) to a "Synchronous" source (rendering directly to the
+GPU).
+
+In this mode, you manage a gs_texture_t object and use the video_render callback to draw it. This bypasses the RAM-to-RAM memcpy entirely.
+
+1. Update Source Flags
+First, you must remove the OBS_SOURCE_ASYNC_VIDEO flag from your obs_source_info struct. This tells OBS that you will handle the rendering yourself.
+
+C++
+struct obs_source_info my_source = {
+    .id = "my_texture_source",
+    .type = OBS_SOURCE_TYPE_INPUT,
+    // Note: No ASYNC_VIDEO flag here
+    .output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW,
+    .get_name = my_get_name,
+    .create = my_create,
+    .destroy = my_destroy,
+    .video_render = my_video_render, // The magic happens here
+    .get_width = my_get_width,
+    .get_height = my_get_height,
+};
+2. Manage the Texture
+You create the texture once (usually in .create) and update it only when your data changes.
+
+Important: Any call to gs_ functions (Graphics System) must be wrapped in obs_enter_graphics() / obs_leave_graphics() unless it's inside the video_render
+callback.
+
+C++
+// Inside your create or update function:
+obs_enter_graphics();
+if (!context->texture) {
+    context->texture = gs_texture_create(width, height, GS_RGBA, 1, NULL, GS_DYNAMIC);
+}
+
+// Updating the texture with new data (this is the only "copy", RAM to GPU)
+uint8_t *ptr;
+uint32_t linesize;
+if (gs_texture_map(context->texture, &ptr, &linesize)) {
+    memcpy(ptr, context->buffer, linesize * height);
+    gs_texture_unmap(context->texture);
+}
+obs_leave_graphics();
+3. The video_render Callback
+This function is called by OBS every time it draws a frame. Because you are using OBS_SOURCE_CUSTOM_DRAW, you are responsible for drawing the texture to the
+screen.
+
+C++
+static void my_video_render(void *data, gs_effect_t *effect) {
+    struct my_context *context = data;
+
+    if (!context->texture) return;
+
+    // Get the default "Draw" effect (simple texture shader)
+    gs_effect_t *draw_effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+
+    // Set the texture as the 'image' parameter for the shader
+    gs_effect_set_texture(gs_effect_get_param_by_name(draw_effect, "image"),
+                          context->texture);
+
+    // Draw the texture onto the current render target (the OBS canvas)
+    while (gs_effect_loop(draw_effect, "Draw")) {
+        obs_source_draw(context->texture, 0, 0, 0, 0, 0);
+    }
+}
+
+*/

@@ -1,5 +1,6 @@
 #Windows build
-#cmake -DCMAKE_TOOLCHAIN_FILE=C:/pro/vcpkg/scripts/buildsystems/vcpkg.cmake --preset windows-x64
+#cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/pro/vcpkg/scripts/buildsystems/vcpkg.cmake --preset windows-x64
+#cmake --build build --config Release
 
 cmake_minimum_required(VERSION 3.28...3.30)
 
@@ -63,8 +64,9 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 PRIVATE 
  libevs_pcie_win_io_api
  PThreads4W::PThreads4W
- ONBINGS::bofstd
  nlohmann_json::nlohmann_json
+ vectorclass::vectorclass
+ ONBINGS::bofstd
 )
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 "${EVS_PCIE_WIN_IO_INCLUDE_DIR}"
@@ -94,13 +96,12 @@ set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_nam
 #  COMMENT "Copying plugin to OBS Studio build directory"
 #)
 
-set(OBS_DIR "C:/pro/obs-studio")
-set(PLUGIN_DIR "C:/pro/home/obs-evs-pcie-win-io")
+set(OBS_DIR "E:/pro/obs-studio")
+set(PLUGIN_DIR "E:/pro/obs-evs-pcie-win-io")
 add_custom_command(
   TARGET ${CMAKE_PROJECT_NAME}
   POST_BUILD
 
-  # 1. Run applocal.ps1 via PowerShell
   COMMAND "C:/Program Files/PowerShell/7/pwsh.exe"
     -noprofile -executionpolicy Bypass
     -file C:/pro/vcpkg/scripts/buildsystems/msbuild/applocal.ps1
@@ -108,42 +109,40 @@ add_custom_command(
     -installedDir "${PLUGIN_DIR}/build_x64/vcpkg_installed/x64-windows/$<IF:$<CONFIG:Debug>,debug,release>/bin"
     -OutVariable out
 
-  # 2. Make rundir directory
   COMMAND ${CMAKE_COMMAND} -E make_directory
-    "${PLUGIN_DIR}/build_x64/rundir/$<CONFIG>"
+    "${OBS_STUDIO_RUNDIR_ROOT}/$<CONFIG>"
 
-  # 3. Copy DLL and PDB to rundir
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>"
     "$<TARGET_PDB_FILE:${CMAKE_PROJECT_NAME}>"
-    "${PLUGIN_DIR}/build_x64/rundir/$<CONFIG>"
+    "${OBS_STUDIO_RUNDIR_ROOT}/$<CONFIG>"
 
-  # 4. Make locale directory
   COMMAND ${CMAKE_COMMAND} -E make_directory
-    "${OBS_DIR}/data/obs-plugins/obs-evs-pcie-win-io/locale"
+    "${OBS_STUDIO_RUNDIR_ROOT}/$<CONFIG>/data/obs-plugins/obs-evs-pcie-win-io/locale"
 
-  # 5. Copy locale directory
   COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${PLUGIN_DIR}/data/locale"
-    "${OBS_DIR}/data/obs-plugins/obs-evs-pcie-win-io/locale"
+    "${OBS_STUDIO_RUNDIR_ROOT}/$<CONFIG>/data/obs-plugins/obs-evs-pcie-win-io/locale"
 
-  # 6. Copy DLL and PDB to OBS Studio plugin directory
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>"
-    "${OBS_DIR}/obs-plugins/64bit/$<TARGET_FILE_NAME:${CMAKE_PROJECT_NAME}>"
+    "${OBS_STUDIO_RUNDIR_ROOT}/$<CONFIG>/obs-plugins/64bit/$<TARGET_FILE_NAME:${CMAKE_PROJECT_NAME}>"
+
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "$<TARGET_PDB_FILE:${CMAKE_PROJECT_NAME}>"
-    "${OBS_DIR}/obs-plugins/64bit/$<TARGET_FILE_BASE_NAME:${CMAKE_PROJECT_NAME}>.pdb"
+    "${OBS_STUDIO_RUNDIR_ROOT}/$<CONFIG>/obs-plugins/64bit/$<TARGET_FILE_BASE_NAME:${CMAKE_PROJECT_NAME}>.pdb"
 
-  # 7. Copy config.json to OBS Studio plugin directory
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${PLUGIN_DIR}/data/obs-evs-pcie-win-io-config.json"
-    "${OBS_DIR}/obs-plugins/64bit/obs-evs-pcie-win-io-config.json"
+    "${OBS_STUDIO_RUNDIR_ROOT}/$<CONFIG>/obs-plugins/64bit/obs-evs-pcie-win-io-config.json"
 
-  # 8. Copy .dll dependencys to OBS Studio plugin directory
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${PLUGIN_DIR}/build_x64/$<CONFIG>/pthreadVC3d.dll"
-    "${OBS_DIR}/obs-plugins/64bit/pthreadVC3d.dll"
+    "${OBS_STUDIO_RUNDIR_ROOT}/$<CONFIG>/bin/64bit/pthreadVC3d.dll"
+
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${PLUGIN_DIR}/build_x64/$<CONFIG>/$<IF:$<CONFIG:Debug>,pthreadVC3d.dll,pthreadVC3.dll>"
+    "${OBS_STUDIO_RUNDIR_ROOT}/$<CONFIG>/bin/64bit/$<IF:$<CONFIG:Debug>,pthreadVC3d.dll,pthreadVC3.dll>"
 
   COMMENT "Post-build: applocal, copy DLL/PDB, copy locale, copy obs-evs-pcie-win-io-config.json"
 )

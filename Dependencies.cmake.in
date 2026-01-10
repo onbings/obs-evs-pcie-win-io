@@ -22,4 +22,5 @@ endmacro()
 
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(PThreads4W CONFIG REQUIRED)
+find_package(vectorclass CONFIG REQUIRED)
 find_package(bofstd CONFIG REQUIRED)

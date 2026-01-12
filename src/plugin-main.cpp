@@ -20,15 +20,24 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <nlohmann/json.hpp>
 #include <obs-module.h>
 #include <plugin-support.h>
+#include <obs-frontend-api.h>
 #include <BoardResourceManager.h>
 #include <fstream>
 #include "SimpleRecorder.h"
 #include "vectorclass.h"
 #include <libevs-pcie-win-io-api/src/EvsPcieIoHelpers.h>
+#include <immintrin.h>
+#include <cstdint>
+#include <algorithm>
 
 #define IN10BITS
 extern struct obs_source_info raw_10bit_info;
 extern struct obs_source_info udp_stream_filter_info;
+extern struct obs_output_info raw_dump_info;
+void on_menu_click(void *private_data);
+// Variables to store our texture references
+gs_stagesurf_t *staged_surf = nullptr;
+
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 static std::map<std::string, EVS::EvsPcieIoApi::eVideoStandard> S_VideoStandardCollection = {
@@ -439,6 +448,450 @@ If you have weird widths (e.g., a width that is a multiple of 6 but not 12), you
 
   return static_cast<uint32_t>(dst - original_dst);
 }
+
+
+// Helpers for limiting values to valid YUV range
+static inline int clamp_y(int v)
+{
+  return (v < 64) ? 64 : (v > 940) ? 940 : v;
+}
+static inline int clamp_c(int v)
+{
+  return (v < 64) ? 64 : (v > 960) ? 960 : v;
+}
+
+uint32_t bgra_to_v210_avx2(const uint8_t *src, uint8_t *dst, int width, int height)
+{
+  // v210 requires the stride to be 128-byte aligned (or at least word aligned),
+  // effectively padding lines to multiples of 6 pixels (4 words).
+  // Stride in bytes = ((Width + 5) / 6) * 16
+  int stride_bytes = (width + 5) / 6 * 16;
+  int total_bytes = stride_bytes * height;
+
+  // Process 12 pixels at a time (Two v210 blocks = 32 bytes output)
+  int width_aligned_12 = (width / 12) * 12;
+
+  // Constants for RGB->YUV Rec.601 conversion (Fixed point 1.8.8)
+  // Y = ( 66*R + 129*G +  25*B + 128) >> 8 + 16
+  const __m256i y_r = _mm256_set1_epi16(66);
+  const __m256i y_g = _mm256_set1_epi16(129);
+  const __m256i y_b = _mm256_set1_epi16(25);
+  const __m256i y_add = _mm256_set1_epi16(128);
+  const __m256i y_offset = _mm256_set1_epi16(16 << 2); // 16 shifted for 10-bit (64)
+
+  // U = (-38*R -  74*G + 112*B + 128) >> 8 + 128
+  const __m256i u_r = _mm256_set1_epi16(-38);
+  const __m256i u_g = _mm256_set1_epi16(-74);
+  const __m256i u_b = _mm256_set1_epi16(112);
+  const __m256i uv_add = _mm256_set1_epi16(128);
+  const __m256i uv_offset = _mm256_set1_epi16(128 << 2); // 128 shifted for 10-bit (512)
+
+  // V = (112*R -  94*G -  18*B + 128) >> 8 + 128
+  const __m256i v_r = _mm256_set1_epi16(112);
+  const __m256i v_g = _mm256_set1_epi16(-94);
+  const __m256i v_b = _mm256_set1_epi16(-18);
+
+  // Shuffle masks to separate B, G, R, A from BGRA stream
+  // We load 12 pixels, so we need masks to arrange them into 16-bit integers
+  // Pattern to pick byte 0, fill 0, byte 4, fill 0... (Blue)
+  // Note: This naive approach requires unpacking.
+
+  // MASK to select 8-bit components from 16-bit interleaved data
+  const __m256i mask_low_byte = _mm256_set1_epi16(0x00FF);
+
+  // V210 Packing Shuffles
+  // We need to map linear Y0..Y5, U0..U2, V0..V2 into the v210 pattern.
+  // The shuffle bytes below are indices into a register formed by packing (U, Y, V).
+  // This part is highly specific to the variable names used in the loop below.
+
+  uint8_t *current_dst_row = dst;
+  const uint8_t *current_src_row = src;
+
+  for (int y = 0; y < height; ++y)
+  {
+    uint32_t *d = (uint32_t *)current_dst_row;
+    const uint8_t *s = current_src_row;
+    int x = 0;
+
+    // --- AVX2 LOOP (12 pixels) ---
+    for (; x < width_aligned_12; x += 12)
+    {
+      // 1. Load 12 Pixels (48 bytes).
+      // We load 2x32 bytes to cover it (overlapping or aligned).
+      // Src is BGRA.
+      __m256i p0_7 = _mm256_loadu_si256((const __m256i *)(s));       // Pixels 0-7
+      __m256i p4_11 = _mm256_loadu_si256((const __m256i *)(s + 16)); // Pixels 4-11 (Overlaps!)
+
+      // We need to organize this into R, G, B channels (16-bit)
+      // Since data is B G R A, we can shuffle.
+      // But we need 12 items. Let's process as two sets of 6 pixels?
+      // Better: Process 8 pixels (p0_7) and 4 pixels (lower half of p8_15, derived from p4_11).
+      // Actually, simplest is to shuffle p0_7 to get R,G,B (8 items)
+      // and shuffle p4_11 to get R,G,B (items 8-11).
+
+      // To simplify logic, let's treat pixels 0-7 (Vec A) and Pixels 6-13 (Wait, 8-11).
+      // Let's reload strictly.
+      __m128i s0 = _mm_loadu_si128((const __m128i *)(s));      // px 0-3
+      __m128i s1 = _mm_loadu_si128((const __m128i *)(s + 16)); // px 4-7
+      __m128i s2 = _mm_loadu_si128((const __m128i *)(s + 32)); // px 8-11
+
+      // Expand to 16-bit B, G, R. (Ignore Alpha)
+      // Planarize using pmovzx or shuffle.
+      // B channel
+      __m256i b0 = _mm256_cvtepu8_epi16(_mm_shuffle_epi8(s0, _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1))); // 0..3
+      __m256i b1 = _mm256_cvtepu8_epi16(_mm_shuffle_epi8(s1, _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1))); // 4..7
+      __m256i b2 = _mm256_cvtepu8_epi16(_mm_shuffle_epi8(s2, _mm_setr_epi8(0, 4, 8, 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1))); // 8..11
+
+      // Combine into one register for 0..7 and another for 8.. (Wait, registers hold 16 shorts)
+      // We have 12 pixels. Let's put 0..7 in Reg1, 8..11 in Reg2.
+      __m256i b_low = _mm256_or_si256(b0, _mm256_slli_si256(b1, 8)); // Pixels 0-7
+      __m256i b_high = b2;                                           // Pixels 8-11 (lower 64 bits valid)
+
+      // Repeat for G and R
+      // G channel (Offset 1)
+      __m256i g0 = _mm256_cvtepu8_epi16(_mm_shuffle_epi8(s0, _mm_setr_epi8(1, 5, 9, 13, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1)));
+      __m256i g1 = _mm256_cvtepu8_epi16(_mm_shuffle_epi8(s1, _mm_setr_epi8(1, 5, 9, 13, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1)));
+      __m256i g2 = _mm256_cvtepu8_epi16(_mm_shuffle_epi8(s2, _mm_setr_epi8(1, 5, 9, 13, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1)));
+      __m256i g_low = _mm256_or_si256(g0, _mm256_slli_si256(g1, 8));
+      __m256i g_high = g2;
+
+      // R channel (Offset 2)
+      __m256i r0 = _mm256_cvtepu8_epi16(_mm_shuffle_epi8(s0, _mm_setr_epi8(2, 6, 10, 14, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1)));
+      __m256i r1 = _mm256_cvtepu8_epi16(_mm_shuffle_epi8(s1, _mm_setr_epi8(2, 6, 10, 14, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1)));
+      __m256i r2 = _mm256_cvtepu8_epi16(_mm_shuffle_epi8(s2, _mm_setr_epi8(2, 6, 10, 14, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1)));
+      __m256i r_low = _mm256_or_si256(r0, _mm256_slli_si256(r1, 8));
+      __m256i r_high = r2;
+
+      // 2. Compute Y (For all 12 pixels)
+      // We use mullo (16-bit mul) because coeff*val < 32768
+      // Y = ((R*66 + G*129 + B*25 + 128) >> 8) + 16
+      // We multiply, add, then shift.
+      auto compute_Y = [&](__m256i r, __m256i g, __m256i b) {
+        __m256i sum = _mm256_add_epi16(_mm256_mullo_epi16(r, y_r), _mm256_mullo_epi16(g, y_g));
+        sum = _mm256_add_epi16(sum, _mm256_mullo_epi16(b, y_b));
+        sum = _mm256_add_epi16(sum, y_add);
+        sum = _mm256_srli_epi16(sum, 8);
+        // Shift to 10-bit range (<< 2) + offset (16<<2)
+        return _mm256_add_epi16(_mm256_slli_epi16(sum, 2), y_offset);
+      };
+
+      __m256i Y_0_7 = compute_Y(r_low, g_low, b_low);
+      __m256i Y_8_11 = compute_Y(r_high, g_high, b_high);
+
+      // 3. Compute U and V (Subsampled 4:2:2)
+      // We need 6 U values and 6 V values.
+      // Horizontal Pair Average: (P0+P1)/2, (P2+P3)/2...
+      // hadd adds adjacent pairs.
+      // _mm256_hadd_epi16(A, B) -> A0+A1, A2+A3... B0+B1...
+      // Note: hadd works within 128-bit lanes.
+      // r_low (0..7) -> hadd -> (0+1, 2+3, 4+5, 6+7, 0+1?? No lane crossing)
+
+      __m256i r_sum = _mm256_hadd_epi16(r_low, r_high); // Lane0: 0+1..6+7. Lane1: 8+9, 10+11, garbage
+      __m256i g_sum = _mm256_hadd_epi16(g_low, g_high);
+      __m256i b_sum = _mm256_hadd_epi16(b_low, b_high);
+
+      // Shift right by 1 to divide by 2
+      __m256i r_sub = _mm256_srli_epi16(r_sum, 1);
+      __m256i g_sub = _mm256_srli_epi16(g_sum, 1);
+      __m256i b_sub = _mm256_srli_epi16(b_sum, 1);
+
+      auto compute_UV = [&](__m256i r, __m256i g, __m256i b, __m256i wr, __m256i wg, __m256i wb) {
+        __m256i sum = _mm256_add_epi16(_mm256_mullo_epi16(r, wr), _mm256_mullo_epi16(g, wg));
+        sum = _mm256_add_epi16(sum, _mm256_mullo_epi16(b, wb));
+        sum = _mm256_add_epi16(sum, uv_add);
+        sum = _mm256_srli_epi16(sum, 8);
+        return _mm256_add_epi16(_mm256_slli_epi16(sum, 2), uv_offset);
+      };
+
+      __m256i U_all = compute_UV(r_sub, g_sub, b_sub, u_r, u_g, u_b);
+      __m256i V_all = compute_UV(r_sub, g_sub, b_sub, v_r, v_g, v_b);
+
+      // 4. Pack into v210 (The tricky part)
+      // We have:
+      // Y_0_7 (Indices 0-7), Y_8_11 (Indices 0-3 in lower lane)
+      // U_all (Indices 0-3 in lower lane are U0..U3. Indices 0-1 in upper lane are U4..U5)
+      // V_all (Same)
+
+      // We need to consolidate Y, U, V into one continuous register or mapped registers.
+      // Let's create a "Y_Final" register with Y0..Y11 packed linearly.
+      // Y_8_11 is in the lower 64 bits of the Y_8_11 register.
+      // We need to move it to the upper 64 bits of Y_0_7? No, Y_0_7 is full.
+      // We actually need to pick specific Y's for specific words.
+
+      // v210 Block 0 (Words 0-3): Y0..Y5, U0..U2, V0..V2
+      // v210 Block 1 (Words 4-7): Y6..Y11, U3..U5, V3..V5
+
+      // Let's create registers for the 3 bit-slots in the final 32-bit words:
+      // Slot A (Bits 0-9), Slot B (Bits 10-19), Slot C (Bits 20-29).
+      // We need 8 integers total (256-bit register).
+
+      // Mapping Table for the 8 Output Words:
+      // W0: U0, Y0, V0
+      // W1: Y1, U1, Y2
+      // W2: V1, Y3, U2
+      // W3: Y4, V2, Y5
+      // -- Block Boundary --
+      // W4: U3, Y6, V3
+      // W5: Y7, U4, Y8
+      // W6: V4, Y9, U5
+      // W7: Y10, V5, Y11
+
+      // We need to construct vectors of 16-bit integers and then PACK them.
+      // However, shuffles operate within 128-bit lanes.
+      // W0-W3 (Block 0) depends on Y0-Y5, U0-U2, V0-V2.
+      // W4-W7 (Block 1) depends on Y6-Y11, U3-U5, V3-V5.
+      // This is clean! Lane 0 handles Block 0, Lane 1 handles Block 1.
+
+      // Prepare Sources for Lane 0:
+      // Y_src0: Y0..Y7 (Already in Y_0_7 lower lane)
+      // U_src0: U0..U3 (In U_all lower lane)
+      // V_src0: V0..V3 (In V_all lower lane)
+
+      // Prepare Sources for Lane 1:
+      // Y_src1: Y8..Y11. We need Y6, Y7 too.
+      // Y6, Y7 are in the upper 32-bits of Y_0_7's lower lane? No, Y_0_7 is 8 shorts.
+      // Y_0_7 = [Y0 Y1 Y2 Y3 | Y4 Y5 Y6 Y7] (128-bit lane view is wrong here, it's 256).
+      // AVX2 Registers: [0..3, 4..7] is not how it works. It's [0..7] in one 128-bit lane? No.
+      // __m256i is two 128-bit lanes.
+      // Lane 0: shorts 0-7. Lane 1: shorts 8-15.
+      // Y_0_7: Lane 0 has Y0..Y7. Lane 1 is empty (we didn't load there).
+      // Wait, compute_Y was 256-bit.
+      // r_low was 256 bit: [0..7 (Lane0)] | [Garbage (Lane1)].
+      // So Y_0_7 has Y0..Y7 in Lane 0.
+      // Y_8_11 has Y8..Y11 in Lane 0 (because we loaded into low bits of r_high).
+
+      // We need to fix the lanes.
+      // We want Lane 0 to contain Data for Block 0 (Px 0-5)
+      // We want Lane 1 to contain Data for Block 1 (Px 6-11)
+
+      // Data needed for Lane 0: Y0-Y5, U0-U2, V0-V2
+      // Data needed for Lane 1: Y6-Y11, U3-U5, V3-V5
+
+      // Current State:
+      // Y_0_7: [Y0..Y7] [0..0]
+      // Y_8_11: [Y8..Y11..] [0..0]
+      // U_all: [U0..U3 (Lane0 low), U4..U5 (Lane1 low? No, hadd result)]
+      // _mm256_hadd_epi16 on [A0..A7][B0..B7] produces [A0+1..A6+7][B0+1..B6+7]
+      // So U_all: Lane 0 has U0..U3. Lane 1 has U4..U5.
+
+      // Fix Y Layout:
+      // Combine Y0-Y7 and Y8-Y11 into one register where:
+      // Lane 0: Y0..Y7 (We only need 0-5)
+      // Lane 1: Y6..Y11 (We have Y6,Y7 in Lane0, Y8-11 in another reg).
+      // Permute Y_0_7 to move Y6,Y7 to Lane 1?
+      // Actually, `vpermt2w` (AVX512) would be nice. In AVX2, we use `vpermq` or insert.
+
+      // Let's create a combined Y register:
+      // Lane 0: Y0..Y7
+      // Lane 1: Y4..Y11 (We need indices relative to 0 for shuffle).
+      // We can construct Lane 1 by: `vpalignr` or combining parts of Y_0_7 and Y_8_11.
+      // Or simpler: Just store them to stack and reload? No, slow.
+      // Let's build "Y_Lane1_Source".
+      // We need [Y6 Y7 Y8 Y9 Y10 Y11 X X].
+      // We have [Y0..Y7] and [Y8..Y11].
+      // Extract Y8..Y11 (64 bits) from Y_8_11.
+      // Extract Y6..Y7 (32 bits) from Y_0_7 (High part of Lane 0).
+
+      // Y_Block0 (Lane 0): Directly use Y_0_7. (Indices 0..5 are valid).
+      // Y_Block1 (Lane 1): We need a register with Y6..Y11 in positions 0..5.
+      // Y6 is at idx 6 in Y_0_7.
+      // Shift Y_0_7 right by 6 shorts? No cross-lane shift in AVX2 easily.
+      // But we can extract 128-bit lane.
+      __m128i y_lane0 = _mm256_castsi256_si128(Y_0_7);
+      __m128i y_part2 = _mm256_castsi256_si128(Y_8_11); // Y8..Y11
+
+      // Need Y6..Y7 from y_lane0 (bytes 12-15).
+      // Combine [Y6 Y7] [Y8 Y9 Y10 Y11] [X X]
+      __m128i y_lane1 = _mm_alignr_epi8(y_part2, y_lane0, 12); // Val2<< | Val1 >> 12.
+      // alignr shifts right. We want y_lane0 high bytes at bottom.
+      // alignr(A, B, 12) -> Takes A(items shift in) and B(shifted out).
+      // We want [Y6 Y7 (from lane0)] followed by [Y8... (from part2)].
+      // correct usage: _mm_alignr_epi8(y_part2, y_lane0, 12).
+      // This puts bytes 12-15 of lane0 (Y6, Y7) at pos 0. Then bytes 0-11 of part2 (Y8..). Perfect.
+
+      // Now reconstruct 256-bit Y source.
+      __m256i Y_combined = _mm256_inserti128_si256(_mm256_castsi128_si256(y_lane0), y_lane1, 1);
+
+      // Fix U/V Layout:
+      // U_all: Lane 0 has U0..U3. Lane 1 has U4..U5.
+      // Block 0 needs U0..U2. (Lane 0 has them).
+      // Block 1 needs U3..U5.
+      // Lane 1 currently has U4, U5 at pos 0, 1.
+      // Lane 0 has U3 at pos 3.
+      // We need a register for Lane 1 that has U3, U4, U5 at pos 0, 1, 2.
+      // Same alignr trick.
+      __m128i u_lane0 = _mm256_castsi256_si128(U_all);
+      __m128i u_part2 = _mm256_extracti128_si256(U_all, 1);
+      __m128i u_lane1 = _mm_alignr_epi8(u_part2, u_lane0, 6); // Offset 3 shorts = 6 bytes. U3..U5.
+      __m256i U_combined = _mm256_inserti128_si256(_mm256_castsi128_si256(u_lane0), u_lane1, 1);
+
+      __m128i v_lane0 = _mm256_castsi256_si128(V_all);
+      __m128i v_part2 = _mm256_extracti128_si256(V_all, 1);
+      __m128i v_lane1 = _mm_alignr_epi8(v_part2, v_lane0, 6);
+      __m256i V_combined = _mm256_inserti128_si256(_mm256_castsi128_si256(v_lane0), v_lane1, 1);
+
+      // Shuffles for Bit Positions
+      // Indices are bytes. 16-bit elements = index * 2.
+      // Block Pattern:
+      // Slot A (0-9):   U0(0), Y1(2), V1(2), Y4(8)
+      // Slot B (10-19): Y0(0), U1(2), Y3(6), V2(4)
+      // Slot C (20-29): V0(0), Y2(4), U2(4), Y5(10)
+
+      // Byte Masks (for pshufb). 0x80 clears.
+      // Note: Each lane processes 4 output words (16 bytes).
+      // Input data is 16-bit. pshufb works on bytes.
+      // To pick `short` at index 2, we need bytes 4, 5.
+
+      // Slot A Source Selection:
+      // W0: U0 (Idx 0) -> Bytes 0, 1 from U_vec
+      // W1: Y1 (Idx 1) -> Bytes 2, 3 from Y_vec
+      // W2: V1 (Idx 1) -> Bytes 2, 3 from V_vec
+      // W3: Y4 (Idx 4) -> Bytes 8, 9 from Y_vec
+
+      // Since sources are different registers (Y, U, V), we can't do one shuffle.
+      // But look: Slot A uses U, Y, V, Y.
+      // Slot B uses Y, U, Y, V.
+      // Slot C uses V, Y, U, Y.
+      // It's mixed.
+
+      // Strategy: Gather all necessary components into one register per Slot via OR?
+      // Better: Mask and OR.
+      // Slot A = Shuffle(U) & Mask_U  | Shuffle(Y) & Mask_Y ...
+
+      // Mask for Slot A (Target 32-bit words 0..3)
+      // W0: U, W1: Y, W2: V, W3: Y
+      const __m256i shuf_A_Y = _mm256_setr_epi8(-1, -1, 2, 3, -1, -1, 8, 9, -1, -1, 2, 3, -1, -1, 8, 9,  // Lane 1 repeat (relative)
+                                                -1, -1, 2, 3, -1, -1, 8, 9, -1, -1, 2, 3, -1, -1, 8, 9); // Wait, setr is for 32 bytes? Yes.
+      // Actually, simply use -1 for unused slots.
+
+      // Let's define the byte sequences for the 16 bytes in a lane:
+      // W0(0-3), W1(4-7), W2(8-11), W3(12-15).
+      // We are building the LOW 10 bits (Slot A).
+      // We will pack them into 32-bit integers later.
+      // First, let's just get the 16-bit values into the right "slots" (0, 1, 2, 3).
+      // Then we can convert 16-bit to 32-bit and shift.
+
+      // Actually, let's assemble 3 vectors of 32-bit integers:
+      // VecA: The values for bits 0-9.
+      // VecB: The values for bits 10-19.
+      // VecC: The values for bits 20-29.
+
+      // This requires mapping 16-bit source to 32-bit dest.
+      // W0 takes U0. Source U0 is bytes 0,1. Dest is bytes 0,1 (and 2,3 zero).
+
+      // Slot A (Bits 0-9)
+      // Lane0: U0, Y1, V1, Y4
+      __m256i val_A = _mm256_or_si256(
+          _mm256_shuffle_epi8(U_combined, _mm256_setr_epi8(0, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 1, -1, -1, -1, -1, -1, -1, -1, -1,
+                                                           -1, -1, -1, -1, -1, -1)), // U0 / U3
+          _mm256_or_si256(_mm256_shuffle_epi8(Y_combined, _mm256_setr_epi8(-1, -1, -1, -1, 2, 3, -1, -1, -1, -1, -1, -1, 8, 9, -1, -1, -1, -1, -1, -1, 2, 3, -1,
+                                                                           -1, -1, -1, -1, -1, 8, 9, -1, -1)), // Y1, Y4 / Y7, Y10
+                          _mm256_shuffle_epi8(V_combined, _mm256_setr_epi8(-1, -1, -1, -1, -1, -1, -1, -1, 2, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+                                                                           -1, -1, 2, 3, -1, -1, -1, -1, -1, -1)) // V1 / V4
+                          ));
+
+      // Slot B (Bits 10-19)
+      // Lane0: Y0, U1, Y3, V2
+      __m256i val_B =
+          _mm256_or_si256(_mm256_shuffle_epi8(Y_combined, _mm256_setr_epi8(0, 1, -1, -1, -1, -1, -1, -1, 6, 7, -1, -1, -1, -1, -1, -1, 0, 1, -1, -1, -1, -1, -1,
+                                                                           -1, 6, 7, -1, -1, -1, -1, -1, -1)), // Y0, Y3
+                          _mm256_or_si256(_mm256_shuffle_epi8(U_combined, _mm256_setr_epi8(-1, -1, -1, -1, 2, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+                                                                                           -1, -1, 2, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1)), // U1
+                                          _mm256_shuffle_epi8(V_combined, _mm256_setr_epi8(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 4, 5, -1, -1, -1, -1,
+                                                                                           -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 4, 5, -1, -1)) // V2
+                                          ));
+
+      // Slot C (Bits 20-29)
+      // Lane0: V0, Y2, U2, Y5
+      __m256i val_C =
+          _mm256_or_si256(_mm256_shuffle_epi8(V_combined, _mm256_setr_epi8(0, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 1, -1, -1, -1, -1,
+                                                                           -1, -1, -1, -1, -1, -1, -1, -1, -1, -1)), // V0
+                          _mm256_or_si256(_mm256_shuffle_epi8(Y_combined, _mm256_setr_epi8(-1, -1, -1, -1, 4, 5, -1, -1, -1, -1, -1, -1, 10, 11, -1, -1, -1, -1,
+                                                                                           -1, -1, 4, 5, -1, -1, -1, -1, -1, -1, 10, 11, -1, -1)), // Y2, Y5
+                                          _mm256_shuffle_epi8(U_combined, _mm256_setr_epi8(-1, -1, -1, -1, -1, -1, -1, -1, 4, 5, -1, -1, -1, -1, -1, -1, -1, -1,
+                                                                                           -1, -1, -1, -1, -1, -1, 4, 5, -1, -1, -1, -1, -1, -1)) // U2
+                                          ));
+
+      // Compose Final 32-bit Words
+      // ValA | (ValB << 10) | (ValC << 20)
+      __m256i final_vec = _mm256_or_si256(val_A, _mm256_slli_epi32(val_B, 10));
+      final_vec = _mm256_or_si256(final_vec, _mm256_slli_epi32(val_C, 20));
+
+      // Store 32 bytes (2 v210 blocks)
+      _mm256_storeu_si256((__m256i *)d, final_vec);
+
+      s += 48; // 12 pixels * 4 bytes
+      d += 8;  // 8 uint32_t output
+    }
+
+    // --- SCALAR FALLBACK ---
+    // Handle remaining pixels (if width is not a multiple of 12)
+    // Note: v210 blocks must be multiples of 6 pixels.
+    // We process in groups of 6 until done.
+    for (; x < width; x += 6)
+    {
+      // If less than 6 pixels remain, v210 usually requires padding the rest of the 128-bit block with 0.
+      // We will process the valid pixels and pad the rest.
+
+      uint32_t yuv[6][3]; // [Pixel][Y,U,V]
+
+      for (int k = 0; k < 6; ++k)
+      {
+        if (x + k < width)
+        {
+          uint8_t b = s[k * 4 + 0];
+          uint8_t g = s[k * 4 + 1];
+          uint8_t r = s[k * 4 + 2];
+
+          // RGB -> YUV
+          int y_val = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
+          int u_val = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
+          int v_val = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+
+          yuv[k][0] = clamp_y(y_val) << 2; // 10-bit
+          yuv[k][1] = clamp_c(u_val) << 2;
+          yuv[k][2] = clamp_c(v_val) << 2;
+        }
+        else
+        {
+          yuv[k][0] = 64 << 2;  // Black Y
+          yuv[k][1] = 512 << 2; // Neutral U
+          yuv[k][2] = 512 << 2; // Neutral V
+        }
+      }
+
+      // Subsample 4:2:2 (Average pairs)
+      // U0 = (U0+U1)/2, U1 = (U2+U3)/2, U2 = (U4+U5)/2
+      uint32_t U[3], V[3];
+      for (int k = 0; k < 3; ++k)
+      {
+        U[k] = (yuv[k * 2][1] + yuv[k * 2 + 1][1]) >> 1;
+        V[k] = (yuv[k * 2][2] + yuv[k * 2 + 1][2]) >> 1;
+      }
+
+      // Pack 6 pixels into 4 words
+      // Word 0: U0, Y0, V0
+      d[0] = (U[0]) | (yuv[0][0] << 10) | (V[0] << 20);
+      // Word 1: Y1, U1, Y2
+      d[1] = (yuv[1][0]) | (U[1] << 10) | (yuv[2][0] << 20);
+      // Word 2: V1, Y3, U2
+      d[2] = (V[1]) | (yuv[3][0] << 10) | (U[2] << 20);
+      // Word 3: Y4, V2, Y5
+      d[3] = (yuv[4][0]) | (V[2] << 10) | (yuv[5][0] << 20);
+
+      s += 24; // 6 pixels * 4 bytes
+      d += 4;
+    }
+
+    // Pad line to 128-byte alignment if needed (handled by stride)
+    current_dst_row += stride_bytes;
+    current_src_row += width * 4;
+  }
+
+  return total_bytes;
+}
+
+
 int TestRecorder()
 {
   int Rts_i;
@@ -536,9 +989,20 @@ extern "C" bool obs_module_load(void)
       }
     }
   }
+  /*
+  obs_get_main_texture(): Returns the gs_texture_t representing the entire rendered canvas.
 
+obs_add_raw_video_callback(): Use this if you want the frame after it has been converted to the output format (like NV12 or I420) but before it is encoded. This is often better for "Virtual Camera" style plugins.
+
+gs_stage_texture(): Used to move the frame data from the GPU to the CPU if you need to perform non-graphics processing (like AI analysis or saving to a file).
+  
+  */
   obs_register_source(&raw_10bit_info);
   obs_register_source(&udp_stream_filter_info);
+  obs_register_output(&raw_dump_info);
+  // Add a button to the Tools menu
+  obs_frontend_add_tools_menu_item("Toggle Raw Stream Dump", on_menu_click, nullptr);
+
   obs_log(LOG_INFO, "obs_module_load returns %s", Rts_B ? "true" : "false");
   //ADD_MESSAGE(EvsHwLGPL::SEV_INFO, "hello world\n");
   return Rts_B;
@@ -579,6 +1043,13 @@ struct raw_10bit_source
   gs_texture_t *texture;
   // Buffer for one frame
   uint8_t *buffer;
+
+  // Audio members
+  FILE *audio_file;
+  uint32_t audio_sample_rate; // 48000 Hz
+  uint32_t audio_channels;    // typically 2 for stereo
+  size_t audio_frame_size;    // bytes per audio frame
+  uint8_t *audio_buffer;
 };
 struct udp_stream_filter
 {
@@ -627,6 +1098,14 @@ static void *raw_create(obs_data_t *settings, obs_source_t *source)
   context->texture = gs_texture_create(context->width, context->height, GS_BGRA, 1, NULL, GS_DYNAMIC);
   obs_leave_graphics();
 
+  // Audio setup: 48 kHz, stereo (2 channels), 32-bit signed int
+  context->audio_sample_rate = 48000;
+  context->audio_channels = 1;
+  context->audio_frame_size = context->audio_channels * sizeof(int32_t) * 1024;
+  context->audio_buffer = (uint8_t *)bmalloc(context->audio_frame_size);
+
+
+
   const char *p = obs_data_get_string(settings, "file_path");
   obs_log(LOG_INFO, ">>>raw_create obs_data_get_string '%s'", p);
 
@@ -637,7 +1116,11 @@ static void *raw_create(obs_data_t *settings, obs_source_t *source)
   sprintf(path, "%s640x480@59.94p_clp_0.yuv8", GL_CliArg_X.BaseDirectory_S.c_str());
 #endif  
   context->file = fopen(path, "rb");
-  obs_log(LOG_INFO, ">>>raw_create '%s' %p", path, context->file);
+  obs_log(LOG_INFO, ">>>raw_create video '%s' %p", path, context->file);
+
+  sprintf(path, "%s16xS24L32@48000_6_0.pcm", GL_CliArg_X.BaseDirectory_S.c_str());
+  context->audio_file = fopen(path, "rb");
+  obs_log(LOG_INFO, ">>>raw_create audio '%s' %p", path, context->audio_file);
 
   return context;
 }
@@ -658,7 +1141,12 @@ static void raw_destroy(void *data)
   {
     fclose(context->file);
   }
+  if (context->audio_file)
+  {
+    fclose(context->audio_file);
+  }
   bfree(context->buffer);
+  bfree(context->audio_buffer);
   bfree(context);
 }
 
@@ -683,8 +1171,8 @@ static void raw_video_tick(void *data, float seconds)
 #if defined(IN10BITS)
   auto t1 = std::chrono::high_resolution_clock::now();
   // Convert v210 to UYVY
-  v210_to_uyvy_avx2_vcl((const uint32_t *)context->buffer, context->buffer, context->width, context->height);
-//  v210_to_uyvy_avx2_opt((const uint32_t *)context->buffer, context->buffer, context->width, context->height);
+  //v210_to_uyvy_avx2_vcl((const uint32_t *)context->buffer, context->buffer, context->width, context->height);
+ v210_to_uyvy_avx2_opt((const uint32_t *)context->buffer, context->buffer, context->width, context->height);
   auto t2 = std::chrono::high_resolution_clock::now();
 
 #endif
@@ -720,6 +1208,38 @@ static void raw_video_tick(void *data, float seconds)
   frame.timestamp = obs_get_video_frame_time();
   //frame.flip = false; // Set to true only if the image appears upside down in OBS
   obs_source_output_video2(context->source, &frame);
+
+
+    // Read and output audio
+  // Calculate audio samples needed for this video frame
+  uint32_t audio_samples = context->audio_sample_rate / context->fps;
+  size_t audio_bytes_needed = audio_samples * sizeof(int32_t);
+  
+  if (audio_bytes_needed >= context->audio_frame_size)
+  {
+    obs_log(LOG_INFO, ">>>raw_video_tick audio %p sz %d not enought", context->audio_file, audio_bytes_needed);
+    audio_bytes_needed = context->audio_frame_size;
+  }
+
+  size_t audio_read = fread(context->audio_buffer, 1, audio_bytes_needed, context->audio_file);
+
+  if (audio_read == audio_bytes_needed)
+  {
+    struct obs_source_audio audio_frame = {0};
+    audio_frame.frames = audio_samples;
+    audio_frame.samples_per_sec = context->audio_sample_rate;
+    audio_frame.speakers = SPEAKERS_MONO;     //SPEAKERS_STEREO;
+    audio_frame.format = AUDIO_FORMAT_32BIT;
+    audio_frame.data[0] = context->audio_buffer;
+    audio_frame.timestamp = frame.timestamp;
+
+    obs_source_output_audio(context->source, &audio_frame);
+  }
+  else
+  {
+    // Audio EOF - loop or stop
+    fseek(context->audio_file, 0, SEEK_SET);
+  }
 
   context->frame_count++;
 #if defined(IN10BITS)
@@ -972,3 +1492,202 @@ static void my_video_render(void *data, gs_effect_t *effect) {
 }
 
 */
+void capture_frame(void *data, uint32_t cx, uint32_t cy)
+{
+  gs_texture_t *main_tex = obs_get_main_texture();
+  if (!main_tex)
+  {
+    return;
+  }
+
+  // Create or recreate staging surface if dimensions changed
+  if (!staged_surf || gs_stagesurface_get_width(staged_surf) != cx || gs_stagesurface_get_height(staged_surf) != cy)
+  {
+    if (staged_surf)
+    {
+      gs_stagesurface_destroy(staged_surf);
+    }
+    // Create staging surface with same format as the texture
+    enum gs_color_format format = gs_texture_get_color_format(main_tex);
+    staged_surf = gs_stagesurface_create(cx, cy, format);
+  }
+
+  if (!staged_surf)
+  {
+    return;
+  }
+
+  // Stage the texture (GPU -> CPU memory)
+  gs_stage_texture(staged_surf, main_tex);
+
+  // Map and access the pixel data
+  uint8_t *data_ptr = nullptr;
+  uint32_t linesize = 0;
+
+  if (gs_stagesurface_map(staged_surf, &data_ptr, &linesize))
+  {
+    // Now you have access to the pixel data
+    // data_ptr contains the pixel data in the format specified during creation
+    // linesize is the byte stride per row
+
+    uint32_t width = gs_stagesurface_get_width(staged_surf);
+    uint32_t height = gs_stagesurface_get_height(staged_surf);
+
+    // Process or write pixel data here
+    // For example, write to file:
+    // fwrite(data_ptr, 1, linesize * height, output_file);
+
+    gs_stagesurface_unmap(staged_surf);
+  }
+}
+
+// Structure to hold our plugin state
+struct raw_dump_context
+{
+  obs_output_t *output;
+  FILE *video_file = nullptr;
+  FILE *audio_file = nullptr;
+  bool active = false;
+};
+
+// --- Callbacks ---
+
+static const char *raw_dump_get_name(void *unused)
+{
+  return "Raw Stream dumper";
+}
+
+static void *raw_dump_create(obs_data_t *settings, obs_output_t *output)
+{
+  auto *context = new raw_dump_context();
+  context->output = output;
+  return context;
+}
+
+static void raw_dump_destroy(void *data)
+{
+  auto *context = static_cast<raw_dump_context *>(data);
+  delete context;
+}
+
+static bool raw_dump_start(void *data)
+{
+  auto *context = static_cast<raw_dump_context *>(data);
+  //Will be created in E:\pro\obs-studio\build_x64\rundir\Debug\bin\64bit
+  context->video_file = fopen("video_stream.yuv", "ab"); // Append Binary
+  context->audio_file = fopen("audio_stream.pcm", "ab");
+
+  if (!context->video_file || !context->audio_file)
+  {
+    return false;
+  }
+
+  // Connect to the main mix
+  if (!obs_output_begin_data_capture(context->output, 0))
+  {
+    return false;
+  }
+
+  context->active = true;
+  return true;
+}
+
+static void raw_dump_stop(void *data, uint64_t ts)
+{
+  auto *context = static_cast<raw_dump_context *>(data);
+
+  obs_output_end_data_capture(context->output);
+  context->active = false;
+
+  if (context->video_file)
+  {
+    fclose(context->video_file);
+  }
+  if (context->audio_file)
+  {
+    fclose(context->audio_file);
+  }
+}
+
+// Receives Video: Final Scene (all filters/sources applied)
+static void raw_dump_video(void *data, struct video_data *frame)
+{
+  auto *context = static_cast<raw_dump_context *>(data);
+
+  // Video frames are planar. We write each plane sequentially.
+  // For NV12: data[0] is Y, data[1] is UV interleaved.
+  for (int i = 0; i < MAX_AV_PLANES; i++)
+  {
+    if (frame->data[i] && frame->linesize[i] > 0)
+    {
+      // Note: In a production plugin, you'd account for padding/stride.
+      // For a basic dump, we write the full linesize x height.
+      uint32_t height = obs_output_get_height(context->output);
+      if (i > 0)
+      {
+        height /= 2; // Simple assumption for YUV420/NV12 chroma
+      }
+
+      fwrite(frame->data[i], 1, frame->linesize[i] * height, context->video_file);
+    }
+  }
+}
+
+// Receives Audio: Final Mix (48Khz, Planar Float)
+static void raw_dump_audio(void *data, struct audio_data *frames)
+{
+  auto *context = static_cast<raw_dump_context *>(data);
+
+  // Audio is planar. We write Channel 0 then Channel 1 etc.
+  // OBS Audio is typically 32-bit Float.
+  for (int i = 0; i < MAX_AUDIO_CHANNELS; i++)
+  {
+    if (frames->data[i])
+    {
+      fwrite(frames->data[i], sizeof(float), frames->frames, context->audio_file);
+    }
+  }
+}
+
+// --- Registration ---
+
+struct obs_output_info raw_dump_info = {
+    .id = "raw_dump_output",
+    .flags = OBS_OUTPUT_VIDEO | OBS_OUTPUT_AUDIO,
+    .get_name = raw_dump_get_name,
+    .create = raw_dump_create,
+    .destroy = raw_dump_destroy,
+    .start = raw_dump_start,
+    .stop = raw_dump_stop,
+    .raw_video = raw_dump_video,
+    .raw_audio = raw_dump_audio,
+};
+
+
+// Global pointer to keep track of our output instance
+obs_output_t *global_dumper = nullptr;
+
+void on_menu_click(void *private_data)
+{
+  // 1. Create the instance of your plugin if it doesn't exist
+  if (!global_dumper)
+  {
+    // "raw_dump_output" is the ID you defined in obs_output_info
+    global_dumper = obs_output_create("raw_dump_output", "MyDumperInstance", nullptr, nullptr);
+  }
+
+  // 2. Toggle Start/Stop
+  if (!obs_output_active(global_dumper))
+  {
+    if (obs_output_start(global_dumper))
+    {
+      blog(LOG_INFO, "Raw Dump Started!");
+    }
+  }
+  else
+  {
+    obs_output_stop(global_dumper);
+    blog(LOG_INFO, "Raw Dump Stopped!");
+  }
+}
+

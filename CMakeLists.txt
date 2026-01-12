@@ -1,5 +1,5 @@
 #Windows build
-#cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/pro/vcpkg/scripts/buildsystems/vcpkg.cmake --preset windows-x64
+#cmake -DCMAKE_BUILD_TYPE=Release -Dlibobs_DIR="E:/pro/obs-studio/build_x64/libobs" -DCMAKE_TOOLCHAIN_FILE=C:/pro/vcpkg/scripts/buildsystems/vcpkg.cmake --preset windows-x64
 #cmake --build build --config Release
 
 cmake_minimum_required(VERSION 3.28...3.30)
@@ -36,8 +36,11 @@ add_library(${CMAKE_PROJECT_NAME} MODULE)
 find_package(libobs REQUIRED)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
 
+set(ENABLE_FRONTEND_API ON)
+message("=========ENABLE_FRONTEND_API=========> " ${ENABLE_FRONTEND_API})
 if(ENABLE_FRONTEND_API)
   find_package(obs-frontend-api REQUIRED)
+  message("==================> obs-frontend-api")
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::obs-frontend-api)
 endif()
 
@@ -139,6 +142,10 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${PLUGIN_DIR}/build_x64/$<CONFIG>/pthreadVC3d.dll"
     "${OBS_STUDIO_RUNDIR_ROOT}/$<CONFIG>/bin/64bit/pthreadVC3d.dll"
+
+  COMMAND ${CMAKE_COMMAND} -E echo "Building with configuration:"
+  COMMAND ${CMAKE_COMMAND} -E echo "  Source: ${PLUGIN_DIR}/build_x64/$<CONFIG>/$<IF:$<CONFIG:Debug>,pthreadVC3d.dll,pthreadVC3.dll>"
+  COMMAND ${CMAKE_COMMAND} -E echo "  Dest: ${OBS_STUDIO_RUNDIR_ROOT}/$<CONFIG>/bin/64bit/$<IF:$<CONFIG:Debug>,pthreadVC3d.dll,pthreadVC3.dll>"
 
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${PLUGIN_DIR}/build_x64/$<CONFIG>/$<IF:$<CONFIG:Debug>,pthreadVC3d.dll,pthreadVC3.dll>"

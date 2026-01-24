@@ -1,5 +1,5 @@
 #Windows build
-#cmake -DCMAKE_BUILD_TYPE=Release -Dlibobs_DIR="E:/pro/obs-studio/build_x64/libobs" -DCMAKE_TOOLCHAIN_FILE=C:/pro/vcpkg/scripts/buildsystems/vcpkg.cmake --preset windows-x64
+#cmake -DCMAKE_BUILD_TYPE=Release -Dlibobs_DIR="E:/pro/obs-studio/build_x64/libobs" -DENABLE_FRONTEND_API=ON -DCMAKE_TOOLCHAIN_FILE=C:/pro/vcpkg/scripts/buildsystems/vcpkg.cmake --preset windows-x64
 #cmake --build build --config Release
 
 cmake_minimum_required(VERSION 3.28...3.30)
@@ -7,9 +7,49 @@ cmake_minimum_required(VERSION 3.28...3.30)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCOPE)
 
 project(${_name} VERSION ${_version})
+# --- START OBS DEPENDENCY WRAPPER (DYNAMIC) ---
+set(DUMMY_SEARCH_DIR "${CMAKE_CURRENT_BINARY_DIR}/cmake_fakes")
+file(MAKE_DIRECTORY "${DUMMY_SEARCH_DIR}")
 
-option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
-option(ENABLE_QT "Use Qt functionality" OFF)
+# This dynamically finds your vcpkg include folder
+set(VCPKG_INCLUDE_PATH "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include")
+
+# 1. Update fake FindSIMDe.cmake
+file(WRITE "${DUMMY_SEARCH_DIR}/FindSIMDe.cmake" "
+    set(SIMDe_FOUND TRUE)
+    if(NOT TARGET SIMDe::SIMDe)
+        add_library(SIMDe::SIMDe INTERFACE IMPORTED)
+        target_include_directories(SIMDe::SIMDe INTERFACE \"${VCPKG_INCLUDE_PATH}\")
+    endif()
+    if(NOT TARGET SIMDe)
+        add_library(SIMDe INTERFACE IMPORTED)
+        target_include_directories(SIMDe INTERFACE \"${VCPKG_INCLUDE_PATH}\")
+    endif()
+")
+
+# 2. Update fake Findw32-pthreads.cmake
+file(WRITE "${DUMMY_SEARCH_DIR}/Findw32-pthreads.cmake" "
+    set(w32-pthreads_FOUND TRUE)
+    if(NOT TARGET w32-pthreads)
+        add_library(w32-pthreads INTERFACE IMPORTED)
+        target_include_directories(w32-pthreads INTERFACE \"${VCPKG_INCLUDE_PATH}\")
+    endif()
+    if(NOT TARGET OBS::w32-pthreads)
+        add_library(OBS::w32-pthreads INTERFACE IMPORTED)
+        set_target_properties(OBS::w32-pthreads PROPERTIES 
+            INTERFACE_INCLUDE_DIRECTORIES \"${VCPKG_INCLUDE_PATH}\"
+        )
+    endif()
+")
+
+list(INSERT CMAKE_MODULE_PATH 0 "${DUMMY_SEARCH_DIR}")
+set(SIMDe_FOUND TRUE CACHE INTERNAL "")
+set(w32-pthreads_FOUND TRUE CACHE INTERNAL "")
+# --- END OBS DEPENDENCY WRAPPER ---
+
+
+#no as they are set to false in preset use -D in cli option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
+#no as they are set to false in preset use -D in cli option(ENABLE_QT "Use Qt functionality" OFF)
 
 # Root for the external build artifacts (contains src/, Debug/, Release/)
 set(EVS_PCIE_WIN_IO_ROOT "C:/bld/evs-pcie-win-io/package/api" CACHE PATH "Root directory of evs-pcie-win-io (contains src/, Debug/, Release/)")
@@ -33,15 +73,45 @@ include(${CMAKE_CURRENT_BINARY_DIR}/obs-evs-pcie-win-io-dependencies.cmake)
 
 add_library(${CMAKE_PROJECT_NAME} MODULE)
 
+# Automatically find obs-frontend-api based on where libobs is
+if(NOT obs-frontend-api_DIR AND libobs_DIR)
+    get_filename_component(_obs_build_root "${libobs_DIR}" DIRECTORY)
+    set(obs-frontend-api_DIR "${_obs_build_root}/UI/obs-frontend-api" CACHE PATH "Path to obs-frontend-api" FORCE)
+endif()
+
 find_package(libobs REQUIRED)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
 
-set(ENABLE_FRONTEND_API ON)
 message("=========ENABLE_FRONTEND_API=========> " ${ENABLE_FRONTEND_API})
 if(ENABLE_FRONTEND_API)
-  find_package(obs-frontend-api REQUIRED)
-  message("==================> obs-frontend-api")
-  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::obs-frontend-api)
+    find_package(obs-frontend-api QUIET)
+
+    if(NOT obs-frontend-api_FOUND AND NOT TARGET OBS::obs-frontend-api)
+        message("--- Manual setup for obs-frontend-api ---")
+        
+        # Determine Header Path
+        set(OBS_FRONTEND_INC "E:/pro/obs-studio/UI/obs-frontend-api")
+        if(NOT EXISTS "${OBS_FRONTEND_INC}/obs-frontend-api.h")
+             set(OBS_FRONTEND_INC "E:/pro/obs-studio/frontend/api")
+        endif()
+
+        add_library(OBS::obs-frontend-api SHARED IMPORTED)
+        
+        # Explicitly map Debug and Release paths to avoid Generator Expression issues in the linker
+        set_target_properties(OBS::obs-frontend-api PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${OBS_FRONTEND_INC}"
+            
+            # RELEASE Files
+            IMPORTED_IMPLIB_RELEASE "E:/pro/obs-studio/build_x64/frontend/api/Release/obs-frontend-api.lib"
+            IMPORTED_LOCATION_RELEASE "E:/pro/obs-studio/build_x64/frontend/api/Release/obs-frontend-api.dll"
+            
+            # DEBUG Files (Note the 'd' suffix if OBS build adds it, otherwise keep same name)
+            IMPORTED_IMPLIB_DEBUG "E:/pro/obs-studio/build_x64/frontend/api/Debug/obs-frontend-api.lib"
+            IMPORTED_LOCATION_DEBUG "E:/pro/obs-studio/build_x64/frontend/api/Debug/obs-frontend-api.dll"
+        )
+    endif()
+
+    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::obs-frontend-api)
 endif()
 
 if(ENABLE_QT)
@@ -69,14 +139,23 @@ PRIVATE
  PThreads4W::PThreads4W
  nlohmann_json::nlohmann_json
  vectorclass::vectorclass
- ONBINGS::bofstd
+ #ONBINGS::bofstd
 )
+if(WIN32)
+    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ws2_32)
+endif()
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 "${EVS_PCIE_WIN_IO_INCLUDE_DIR}"
 )
 target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_20)
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE 
 src/plugin-main.cpp
+src/VideoHelper.h
+src/VideoHelper.cpp
+src/Shader.h
+src/Shader.cpp
+src/PluginUtil.h
+src/PluginUtil.cpp
 src/BoardResourceManager.h
 src/BoardResourceManager.cpp
 src/SimpleRecorder.h
@@ -138,10 +217,6 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${PLUGIN_DIR}/data/obs-evs-pcie-win-io-config.json"
     "${OBS_STUDIO_RUNDIR_ROOT}/$<CONFIG>/obs-plugins/64bit/obs-evs-pcie-win-io-config.json"
-
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${PLUGIN_DIR}/build_x64/$<CONFIG>/pthreadVC3d.dll"
-    "${OBS_STUDIO_RUNDIR_ROOT}/$<CONFIG>/bin/64bit/pthreadVC3d.dll"
 
   COMMAND ${CMAKE_COMMAND} -E echo "Building with configuration:"
   COMMAND ${CMAKE_COMMAND} -E echo "  Source: ${PLUGIN_DIR}/build_x64/$<CONFIG>/$<IF:$<CONFIG:Debug>,pthreadVC3d.dll,pthreadVC3.dll>"

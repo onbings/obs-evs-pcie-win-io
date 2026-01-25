@@ -24,7 +24,7 @@ srt://127.0.0.1:9001?mode=listener&latency=50000
 #include <plugin-support.h>
 #include <obs-frontend-api.h>
 #include "PluginUtil.h"
-#include "VideoHelper.h"
+#include "AudioVideoHelper.h"
 #include "Shader.h"
 
 #define IN10BITS
@@ -272,22 +272,7 @@ static void v210_video_tick(void *data, float seconds)
 #if defined(AUDIO_SIN)
   if (samples_to_generate > 0)
   {
-    const double frequency = 440.0;
-    const double amplitude = 0.5 * 2147483647.0;
-    const double sample_rate = (double)context->audio_sample_rate;
-    const double twopi = 2.0 * M_PI;
-
-    // 2. Generate exactly 'samples_to_generate'
-    for (uint32_t i = 0; i < samples_to_generate; i++)
-    {
-      pSample_S32[i] = (int32_t)(amplitude * sin(context->audio_phase));
-
-      context->audio_phase += (twopi * frequency) / sample_rate;
-      if (context->audio_phase > twopi)
-      {
-        context->audio_phase -= twopi;
-      }
-    }
+    GenerateAudioSinusData(440.0, 0.5 * 0x7FFFFFFF, (double)context->audio_sample_rate, samples_to_generate, pSample_S32, context->audio_phase);
   }
 #else
   // --- FILE READING ---

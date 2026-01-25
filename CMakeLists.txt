@@ -150,8 +150,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_20)
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE 
 src/plugin-main.cpp
-src/VideoHelper.h
-src/VideoHelper.cpp
+src/AudioVideoHelper.h
+src/AudioVideoHelper.cpp
 src/Shader.h
 src/Shader.cpp
 src/PluginUtil.h

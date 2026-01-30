@@ -26,7 +26,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 // We embed this as a raw string literal to avoid external file dependencies.
 // In a real production plugin, you might load this from a .effect file.
 
-const char *GL_v210_effect_code = R"EFFECT(
+const char *GL_v210_unpacker_effect_code = R"EFFECT(
 uniform float4x4 ViewProj;
 uniform texture2d image;
 uniform float width_pixels;

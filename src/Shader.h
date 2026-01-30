@@ -17,4 +17,4 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 */
 #pragma once
 #include <cstdint>
-extern const char *GL_v210_effect_code;
+extern const char *GL_v210_unpacker_effect_code;

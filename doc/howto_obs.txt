@@ -36,3 +36,231 @@
    
    doc obs: https://docs.obsproject.com/
    forum obs: https://obsproject.com/forum/plugins/
+
+
+
+
+
+For working with the 16-channel interleaved audio from our plugin in Multi-Channel Mode, here are the best OBS Studio options for routing, effects, and channel
+ganging:
+
+Built-in OBS Audio Tools:
+-Audio Filters (Per Source):
+-Gain: Adjust individual channel levels
+-Compressor: Dynamic range control
+-Noise Gate: Eliminate background noise
+-EQ: 3-band equalizer
+-Limiter: Prevent clipping
+-VST 2.x Plugin: Load external VST effects
+Audio Monitoring:
+-Audio Advanced Properties: Set monitoring to "Monitor Only" or "Monitor and Output"
+-Audio Mixer: Individual mute/unmute per source
+Recommended Third-Party Plugins:
+1. ReaPlugs (Free VST Suite)
+-ReaEQ: Advanced equalizer with multiple bands
+-ReaComp: Professional compressor
+-ReaGate: Advanced noise gate
+-ReaChannelMap: ? Perfect for channel routing and ganging!
+2. Audio Routing & Channel Management:
+-Audio Monitor Plugin: Advanced audio routing and monitoring
+-Source Record Plugin: Record individual channels separately
+-Audio Output Capture: Capture system audio for routing
+3. Professional VST Plugins:
+-Waves plugins: Professional audio processing
+-FabFilter: High-quality EQ and dynamics
+-Reaper ReaPlugs: Free and powerful
+-Channel Ganging to Create Stereo:
+Method 1: Using ReaChannelMap (Recommended)
+-Install ReaPlugs VST suite
+-Add "VST 2.x Plugin" filter to your obs-evs-pcie-win-io source
+-Select "ReaChannelMap"
+-Configure channel routing:
+-Input channels 1+2 ? Output Left+Right
+-Input channels 3+4 ? Output Left+Right (different mix)
+-Apply effects per stereo pair
+Method 2: Using OBS Scene Collections
+-Create multiple Audio Sources that reference the same plugin instance
+-Use Audio Advanced Properties to assign different channels
+-Group sources for stereo effects
+Method 3: External Audio Software
+-VoiceMeeter: Virtual audio mixer for advanced routing
+-Virtual Audio Cable: Route audio between applications
+-JACK Audio: Professional audio routing (Windows/Linux)
+Practical Workflow Example:
+Quick Setup Steps:
+-Download ReaPlugs: Free from Cockos Reaper website
+-Install VST plugins: Place in OBS VST folder
+-Add VST Filter: Right-click your source ? Filters ? VST 2.x Plugin
+-Configure Routing: Use ReaChannelMap to gang channels into stereo pairs
+-Apply Effects: Add additional VST filters for each stereo pair
+-ReaChannelMap is particularly powerful because it can:
+? Gang any 2 channels into stereo
+? Apply different routing matrices
+? Adjust levels per channel
+? Mix multiple input channels to single outputs
+
+Configuration Spécifique de ReaChannelMap pour Ganger les Canaux
+Installation et Accès:
+Télécharger ReaPlugs: www.reaper.fm/reaplugs/
+Installer dans le dossier VST d'OBS (généralement C:\Program Files\obs-studio\obs-plugins\64bit\)
+Redémarrer OBS Studio
+Configuration dans OBS:
+Clic droit sur votre source "obs-evs-pcie-win-io source"
+Filtres ? + ? VST 2.x Plugin
+Sélectionner: ReaChannelMap
+Ouvrir l'interface du plugin
+Configuration ReaChannelMap pour 8 Paires Stéréo:
+Configuration Matrix (16 canaux ? 8 paires stéréo):
+
+INPUT (vos 16 canaux)    ?    OUTPUT (8 paires stéréo)
++-----------------------------------------------------+
+¦ Canal 1  ? Output Left 1    (Paire Stéréo A)       ¦
+¦ Canal 2  ? Output Right 1                           ¦
+¦ Canal 3  ? Output Left 2    (Paire Stéréo B)       ¦
+¦ Canal 4  ? Output Right 2                           ¦
+¦ Canal 5  ? Output Left 3    (Paire Stéréo C)       ¦
+¦ Canal 6  ? Output Right 3                           ¦
+¦ ...                                                 ¦
+¦ Canal 15 ? Output Left 8    (Paire Stéréo H)       ¦
+¦ Canal 16 ? Output Right 8                           ¦
++-----------------------------------------------------+
+
+Interface ReaChannelMap - Étapes Détaillées:
+1. Configuration des Inputs:
+Inputs: Mettre à 16 (vos 16 canaux source)
+Outputs: Mettre à 16 (8 paires × 2 canaux)
+2. Matrice de Routage:
+Dans la grille, pour chaque paire:
+
+Paire Stéréo 1 (Canaux 1+2):
+- Input 1 ? Output 1 (Left):  Gain = 1.0
+- Input 2 ? Output 2 (Right): Gain = 1.0
+
+Paire Stéréo 2 (Canaux 3+4):
+- Input 3 ? Output 3 (Left):  Gain = 1.0
+- Input 4 ? Output 4 (Right): Gain = 1.0
+
+3. Contrôles Avancés:
+
+Pour chaque paire, vous pouvez:
++- Gain individuel par canal (-8 à +12dB)
++- Pan control (si mono ? stéréo)
++- Phase invert (bouton f)
++- Mute individuel par canal
++- Solo pour isolation
+
+Presets Recommandés:
+Preset 1: 8 Paires Stéréo Simples
+
+Channels 1+2  ? Stereo Pair A (Sine 440Hz + 550Hz)
+Channels 3+4  ? Stereo Pair B (Sine 660Hz + 770Hz)
+Channels 5+6  ? Stereo Pair C (Sine 880Hz + 990Hz)
+Channels 7+8  ? Stereo Pair D (Sine 1100Hz + 1210Hz)
+Channels 9-16 ? Disabled ou gain = 0
+
+Preset 2: Mix Créatif
+
+Channels 1+3  ? Stereo Pair A (Mix harmonies)
+Channels 2+4  ? Stereo Pair B (Mix complémentaires)
+Channels 5+7  ? Stereo Pair C
+Channels 6+8  ? Stereo Pair D
+Contrôle en Temps Réel:
+? Gain temps réel pour chaque canal
+? Mute instantané par paire
+? Monitoring par canal ou paire
+? Sauvegarde des réglages dans la scène OBS
+Cette configuration vous donnera un contrôle total sur le groupement de vos 16 canaux en paires stéréo, avec la possibilité d'appliquer des effets différents
+sur chaque paire par la suite!
+
+Persistence:
+OBS Handles Persistence Automatically:
+? Scene Collection Files: Settings saved in .json files
+? Source Duplication: Settings copied when duplicating sources
+? Scene Switching: Settings maintained across scene changes
+? OBS Restart: All settings restored on restart
+3. Where Settings Are Stored:
+
+Windows: %APPDATA%\obs-studio\basic\scenes\*.json
+Each scene collection contains:
+{
+  "sources": [
+    {
+      "id": "obs-evs-pcie-win-io",
+      "settings": {
+        "video_source_type": 2,
+        "audio_source_type": 2,
+        "split_audio_mode": false,
+        "use_10bit_video": true,
+        "color_bar_moving": true,
+        "sine_enabled_1": true,
+        "sine_frequency_1": 440.0,
+        "sine_amplitude_1": 0.3,
+        // ... all your settings
+      }
+    }
+  ]
+}
+
+4. Your Plugin Property Flow:
+1. Source Creation ? v210_get_defaults() ? Sets initial values
+2. User Changes UI ? v210_update() ? Updates context variables
+3. OBS Auto-Save ? Settings written to scene collection
+4. OBS Restart ? Settings loaded ? v210_update() called with saved values
+
+Advanced Persistence Options (if needed):
+Manual Save/Load (rarely needed):
+// Save custom data
+obs_data_t *save_data = obs_save_source(source);
+// Load custom data1
+obs_load_source(source, save_data);
+
+
+plugin vst:
+Pour utiliser ReaChannelMap (qui fait partie de la suite ReaPlugs) dans OBS Studio afin de gérer vos canaux audio, voici la marche à suivre étape par étape.
+
+1. Téléchargement et Installation
+Allez sur www.reaper.fm/reaplugs/ et suivez ces instructions :
+
+Lien : Descendez en bas de la page et cliquez sur "Download: ReaPlugs VST v2.36 64-bit" (la version 64-bit est indispensable pour les versions modernes d'OBS).
+
+Installation : Lancez l'installateur .exe.
+
+Important : Par défaut, il installe les fichiers dans C:\Program Files\VSTPlugins\ReaPlugs. C'est un emplacement standard qu'OBS scanne automatiquement.
+
+Durant l'installation, assurez-vous que ReaJS est bien coché (ReaChannelMap est souvent inclus via l'interface ReaJS ou comme plugin autonome selon les versions
+du bundle).
+
+2. Configurer OBS Studio pour voir le plugin
+Si OBS était ouvert pendant l'installation, redémarrez-le.
+
+Dans le panneau Mélangeur audio d'OBS, cliquez sur les trois petits points (ou l'engrenage) à côté de la source audio que vous voulez modifier.
+
+Sélectionnez Filtres.
+
+Cliquez sur le + en bas à gauche et choisissez Plugin VST 2.x.
+
+Donnez-lui un nom (ex: "Routing Canaux").
+
+Dans le menu déroulant "Plugin VST 2.x", recherchez reajs ou reachannelmap.
+
+Note : Si vous ne voyez que "reajs", sélectionnez-le, puis cliquez sur "Ouvrir l'interface du plugin" et cherchez le script "channel_mapper" ou "channelmap" à
+l'intérieur.
+
+3. Utiliser ReaChannelMap pour le routage
+Une fois le plugin ouvert (cliquez sur Ouvrir l'interface du plugin dans OBS) :
+
+Le principe : Vous verrez une grille. Les lignes représentent vos entrées (le son qui arrive) et les colonnes vos sorties (vers où le son va dans OBS).
+
+Affectation : Cliquez sur les cases pour créer des liens. Par exemple, si vous voulez envoyer le canal 1 de votre interface vers les canaux 1 et 2 d'OBS (pour
+transformer un signal mono en stéréo), cochez les cases correspondantes.
+
+Utilité : C'est l'outil parfait si vous avez une interface audio avec beaucoup d'entrées et que vous voulez isoler uniquement l'entrée micro n°3 pour qu'elle
+soit diffusée sur votre stream.
+
+?? Astuce de dépannage
+Si le plugin n'apparaît pas dans la liste d'OBS :
+
+Vérifiez qu'il est bien installé dans C:\Program Files\Common Files\VST2 ou C:\Program Files\VSTPlugins.
+
+Allez dans les Paramètres d'OBS > Audio et vérifiez que votre fréquence d'échantillonnage (44.1kHz ou 48kHz) correspond à celle de votre système Windows pour
+éviter les conflits de driver.

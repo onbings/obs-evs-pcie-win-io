@@ -1,9 +1,7 @@
 #Windows build
-#cmake -DCMAKE_BUILD_TYPE=Release -Dlibobs_DIR="${ROOT_PRO_DIR}/obs-studio/build_x64/libobs" -DENABLE_FRONTEND_API=ON -DCMAKE_TOOLCHAIN_FILE=C:/pro/vcpkg/scripts/buildsystems/vcpkg.cmake --preset windows-x64
-#cmake -DCMAKE_BUILD_TYPE=Release -Dlibobs_DIR="C:/pro/home/obs-studio/build_x64/libobs" -DENABLE_FRONTEND_API=ON -DCMAKE_TOOLCHAIN_FILE=C:/pro/vcpkg/scripts/buildsystems/vcpkg.cmake --preset windows-x64
-#cmake --build build --config Release
-#for obs-studio cmake -DCMAKE_SYSTEM_VERSION=10.0.26100.0 --preset windows-x64
-#no cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_FRONTEND_API=ON -DCMAKE_TOOLCHAIN_FILE=C:/pro/vcpkg/scripts/buildsystems/vcpkg.cmake --preset windows-x64 obs lib are build in the .deps subdir...
+#cmake -DCMAKE_BUILD_TYPE=Debug -DENABLE_FRONTEND_API=ON -DCMAKE_TOOLCHAIN_FILE=C:/pro/vcpkg/scripts/buildsystems/vcpkg.cmake --preset windows-x64
+
+
 cmake_minimum_required(VERSION 3.28...3.30)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCOPE)

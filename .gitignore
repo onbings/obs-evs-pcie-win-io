@@ -39,3 +39,7 @@
 
 # debug information files
 *.dwo
+
+#dependencies&build
+.deps
+build_x64

@@ -22,7 +22,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 void GenerateAudioSinusData(const double frequency, const double amplitude, const double sample_rate, uint32_t samples_to_generate, int32_t *pSample_S32,
                             double &_rAudioPhase_lf);
 
-    // Video Helpers
+// Video Helpers
 void fill_uyvy_color_bars(uint8_t *buffer, int width, int height, bool is_10bit);
 uint32_t v210_to_uyvy_avx2_vcl(const uint32_t *src, uint8_t *dst, int width, int height);
 uint32_t v210_to_uyvy_avx2_opt(const uint32_t *__restrict src, uint8_t *__restrict dst, int width, int height);
@@ -31,5 +31,3 @@ uint32_t bgra_to_v210_avx2(const uint8_t *src, uint8_t *dst, int width, int heig
 void rgb_to_yuv_fast(uint8_t r, uint8_t g, uint8_t b, uint16_t &y, uint16_t &u, uint16_t &v);
 void rgb_to_yuv(uint8_t r, uint8_t g, uint8_t b, uint16_t &y, uint16_t &u, uint16_t &v);
 void draw_line_avx2(uint8_t *buffer, int width, int height, uint8_t r, uint8_t g, uint8_t b, int pos, int thickness, bool horizontal, bool is_10bit);
-
-

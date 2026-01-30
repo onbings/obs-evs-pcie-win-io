@@ -18,6 +18,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <AudioVideoHelper.h>
 #include "vectorclass.h"
 #include <algorithm>
+#include <cstring>        // for memset
 #define _USE_MATH_DEFINES // for C++
 #include <math.h>
 #if 0
@@ -104,7 +105,6 @@ void rgb_to_yuv_fast(uint8_t r, uint8_t g, uint8_t b, uint16_t &y, uint16_t &u, 
   u = std::clamp<uint16_t>(u, 0, 255);
   v = std::clamp<uint16_t>(v, 0, 255);
 }
-
 
 // RGB to YUV BT.601 Full Range helper
 void rgb_to_yuv(uint8_t r, uint8_t g, uint8_t b, uint16_t &y, uint16_t &u, uint16_t &v)
@@ -282,7 +282,6 @@ void fill_uyvy_color_bars(uint8_t *buffer, int width, int height, bool is_10bit)
     }
   }
 }
-
 
 // Transforming v210 (10-bit 4:2:2) to UYVY (8-bit 4:2:2)
 uint32_t v210_to_uyvy_avx2_vcl(const uint32_t *src, uint8_t *dst, int width, int height)
@@ -911,12 +910,12 @@ uint32_t bgra_to_v210_avx2(const uint8_t *src, uint8_t *dst, int width, int heig
   return total_bytes;
 }
 
-
-void GenerateAudioSinusData(const double frequency, const double amplitude, const double sample_rate, uint32_t samples_to_generate, int32_t *pSample_S32, double &_rAudioPhase_lf)
+void GenerateAudioSinusData(const double frequency, const double amplitude, const double sample_rate, uint32_t samples_to_generate, int32_t *pSample_S32,
+                            double &_rAudioPhase_lf)
 {
-  //const double frequency = 440.0;
-  //const double amplitude = 0.5 * 2147483647.0;
-  //const double sample_rate = (double)context->audio_sample_rate;
+  // const double frequency = 440.0;
+  // const double amplitude = 0.5 * 2147483647.0;
+  // const double sample_rate = (double)context->audio_sample_rate;
   const double twopi = 2.0 * M_PI;
 
   // 2. Generate exactly 'samples_to_generate'
@@ -928,6 +927,43 @@ void GenerateAudioSinusData(const double frequency, const double amplitude, cons
     if (_rAudioPhase_lf > twopi)
     {
       _rAudioPhase_lf -= twopi;
+    }
+  }
+}
+
+void GenerateMultiChannelAudioSinusData(const double *frequencies, const double *amplitudes, const bool *channel_enabled, int num_channels,
+                                        const double sample_rate, uint32_t samples_to_generate, int32_t *pSample_S32, double *channel_phases)
+{
+  const double twopi = 2.0 * M_PI;
+
+  // Clear the output buffer first
+  memset(pSample_S32, 0, samples_to_generate * num_channels * sizeof(int32_t));
+
+  // Generate samples for each channel
+  for (int channel = 0; channel < num_channels; channel++)
+  {
+    if (!channel_enabled[channel])
+    {
+      continue; // Skip disabled channels
+    }
+
+    const double frequency = frequencies[channel];
+    const double amplitude = amplitudes[channel];
+    double &phase = channel_phases[channel];
+
+    // Generate samples for this channel
+    for (uint32_t sample = 0; sample < samples_to_generate; sample++)
+    {
+      // Interleaved format: sample_index = sample * num_channels + channel
+      int32_t sample_value = (int32_t)(amplitude * sin(phase));
+      pSample_S32[sample * num_channels + channel] = sample_value;
+
+      // Update phase for next sample
+      phase += (twopi * frequency) / sample_rate;
+      if (phase > twopi)
+      {
+        phase -= twopi;
+      }
     }
   }
 }

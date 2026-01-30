@@ -1,7 +1,9 @@
 #Windows build
-#cmake -DCMAKE_BUILD_TYPE=Release -Dlibobs_DIR="E:/pro/obs-studio/build_x64/libobs" -DENABLE_FRONTEND_API=ON -DCMAKE_TOOLCHAIN_FILE=C:/pro/vcpkg/scripts/buildsystems/vcpkg.cmake --preset windows-x64
+#cmake -DCMAKE_BUILD_TYPE=Release -Dlibobs_DIR="${ROOT_PRO_DIR}/obs-studio/build_x64/libobs" -DENABLE_FRONTEND_API=ON -DCMAKE_TOOLCHAIN_FILE=C:/pro/vcpkg/scripts/buildsystems/vcpkg.cmake --preset windows-x64
+#cmake -DCMAKE_BUILD_TYPE=Release -Dlibobs_DIR="C:/pro/home/obs-studio/build_x64/libobs" -DENABLE_FRONTEND_API=ON -DCMAKE_TOOLCHAIN_FILE=C:/pro/vcpkg/scripts/buildsystems/vcpkg.cmake --preset windows-x64
 #cmake --build build --config Release
-
+#for obs-studio cmake -DCMAKE_SYSTEM_VERSION=10.0.26100.0 --preset windows-x64
+#no cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_FRONTEND_API=ON -DCMAKE_TOOLCHAIN_FILE=C:/pro/vcpkg/scripts/buildsystems/vcpkg.cmake --preset windows-x64 obs lib are build in the .deps subdir...
 cmake_minimum_required(VERSION 3.28...3.30)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCOPE)
@@ -56,9 +58,10 @@ set(EVS_PCIE_WIN_IO_ROOT "C:/bld/evs-pcie-win-io/package/api" CACHE PATH "Root d
 set(EVS_PCIE_WIN_IO_INCLUDE_DIR "${EVS_PCIE_WIN_IO_ROOT}" CACHE PATH "Path to evs-pcie-win-io include directory")
 set(EVS_PCIE_WIN_IO_LIB_DEBUG   "${EVS_PCIE_WIN_IO_ROOT}/Debug/libevs-pcie-win-io-api.lib" CACHE FILEPATH "Debug import library for evs-pcie-win-io")
 set(EVS_PCIE_WIN_IO_LIB_RELEASE "${EVS_PCIE_WIN_IO_ROOT}/Release/libevs-pcie-win-io-api.lib" CACHE FILEPATH "Release import library for evs-pcie-win-io")
-
+#set(ROOT_PRO_DIR "E:/pro")
+set(ROOT_PRO_DIR "C:/pro/home")
 # Root rundir for OBS Studio runtime copies; final path will append configuration and plugin subpath
-set(OBS_STUDIO_RUNDIR_ROOT "E:/pro/obs-studio/build_x64/rundir" CACHE PATH "Root rundir where OBS build places runtimes (plugin path will be <ROOT>/$<CONFIG>/obs-plugins/64bit)")
+set(OBS_STUDIO_RUNDIR_ROOT "${ROOT_PRO_DIR}/obs-studio/build_x64/rundir" CACHE PATH "Root rundir where OBS build places runtimes (plugin path will be <ROOT>/$<CONFIG>/obs-plugins/64bit)")
 
 include(compilerconfig)
 include(defaults)
@@ -90,9 +93,9 @@ if(ENABLE_FRONTEND_API)
         message("--- Manual setup for obs-frontend-api ---")
         
         # Determine Header Path
-        set(OBS_FRONTEND_INC "E:/pro/obs-studio/UI/obs-frontend-api")
+        set(OBS_FRONTEND_INC "${ROOT_PRO_DIR}/obs-studio/UI/obs-frontend-api")
         if(NOT EXISTS "${OBS_FRONTEND_INC}/obs-frontend-api.h")
-             set(OBS_FRONTEND_INC "E:/pro/obs-studio/frontend/api")
+             set(OBS_FRONTEND_INC "${ROOT_PRO_DIR}/obs-studio/frontend/api")
         endif()
 
         add_library(OBS::obs-frontend-api SHARED IMPORTED)
@@ -102,12 +105,12 @@ if(ENABLE_FRONTEND_API)
             INTERFACE_INCLUDE_DIRECTORIES "${OBS_FRONTEND_INC}"
             
             # RELEASE Files
-            IMPORTED_IMPLIB_RELEASE "E:/pro/obs-studio/build_x64/frontend/api/Release/obs-frontend-api.lib"
-            IMPORTED_LOCATION_RELEASE "E:/pro/obs-studio/build_x64/frontend/api/Release/obs-frontend-api.dll"
+            IMPORTED_IMPLIB_RELEASE "${ROOT_PRO_DIR}/obs-studio/build_x64/frontend/api/Release/obs-frontend-api.lib"
+            IMPORTED_LOCATION_RELEASE "${ROOT_PRO_DIR}/obs-studio/build_x64/frontend/api/Release/obs-frontend-api.dll"
             
             # DEBUG Files (Note the 'd' suffix if OBS build adds it, otherwise keep same name)
-            IMPORTED_IMPLIB_DEBUG "E:/pro/obs-studio/build_x64/frontend/api/Debug/obs-frontend-api.lib"
-            IMPORTED_LOCATION_DEBUG "E:/pro/obs-studio/build_x64/frontend/api/Debug/obs-frontend-api.dll"
+            IMPORTED_IMPLIB_DEBUG "${ROOT_PRO_DIR}/obs-studio/build_x64/frontend/api/Debug/obs-frontend-api.lib"
+            IMPORTED_LOCATION_DEBUG "${ROOT_PRO_DIR}/obs-studio/build_x64/frontend/api/Debug/obs-frontend-api.dll"
         )
     endif()
 
@@ -178,8 +181,8 @@ set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_nam
 #  COMMENT "Copying plugin to OBS Studio build directory"
 #)
 
-set(OBS_DIR "E:/pro/obs-studio")
-set(PLUGIN_DIR "E:/pro/obs-evs-pcie-win-io")
+set(OBS_DIR "${ROOT_PRO_DIR}/obs-studio")
+set(PLUGIN_DIR "${ROOT_PRO_DIR}/obs-evs-pcie-win-io")
 add_custom_command(
   TARGET ${CMAKE_PROJECT_NAME}
   POST_BUILD

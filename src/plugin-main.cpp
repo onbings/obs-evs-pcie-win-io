@@ -18,23 +18,212 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 /*
 srt://127.0.0.1:9001?mode=listener&latency=50000
 */
+/*
+For working with the 16-channel interleaved audio from our plugin in Multi-Channel Mode, here are the best OBS Studio options for routing, effects, and channel
+ganging:
+
+Built-in OBS Audio Tools:
+-Audio Filters (Per Source):
+-Gain: Adjust individual channel levels
+-Compressor: Dynamic range control
+-Noise Gate: Eliminate background noise
+-EQ: 3-band equalizer
+-Limiter: Prevent clipping
+-VST 2.x Plugin: Load external VST effects
+Audio Monitoring:
+-Audio Advanced Properties: Set monitoring to "Monitor Only" or "Monitor and Output"
+-Audio Mixer: Individual mute/unmute per source
+Recommended Third-Party Plugins:
+1. ReaPlugs (Free VST Suite)
+-ReaEQ: Advanced equalizer with multiple bands
+-ReaComp: Professional compressor
+-ReaGate: Advanced noise gate
+-ReaChannelMap: ⭐ Perfect for channel routing and ganging!
+2. Audio Routing & Channel Management:
+-Audio Monitor Plugin: Advanced audio routing and monitoring
+-Source Record Plugin: Record individual channels separately
+-Audio Output Capture: Capture system audio for routing
+3. Professional VST Plugins:
+-Waves plugins: Professional audio processing
+-FabFilter: High-quality EQ and dynamics
+-Reaper ReaPlugs: Free and powerful
+-Channel Ganging to Create Stereo:
+Method 1: Using ReaChannelMap (Recommended)
+-Install ReaPlugs VST suite
+-Add "VST 2.x Plugin" filter to your obs-evs-pcie-win-io source
+-Select "ReaChannelMap"
+-Configure channel routing:
+-Input channels 1+2 → Output Left+Right
+-Input channels 3+4 → Output Left+Right (different mix)
+-Apply effects per stereo pair
+Method 2: Using OBS Scene Collections
+-Create multiple Audio Sources that reference the same plugin instance
+-Use Audio Advanced Properties to assign different channels
+-Group sources for stereo effects
+Method 3: External Audio Software
+-VoiceMeeter: Virtual audio mixer for advanced routing
+-Virtual Audio Cable: Route audio between applications
+-JACK Audio: Professional audio routing (Windows/Linux)
+Practical Workflow Example:
+Quick Setup Steps:
+-Download ReaPlugs: Free from Cockos Reaper website
+-Install VST plugins: Place in OBS VST folder
+-Add VST Filter: Right-click your source → Filters → VST 2.x Plugin
+-Configure Routing: Use ReaChannelMap to gang channels into stereo pairs
+-Apply Effects: Add additional VST filters for each stereo pair
+-ReaChannelMap is particularly powerful because it can:
+? Gang any 2 channels into stereo
+? Apply different routing matrices
+? Adjust levels per channel
+? Mix multiple input channels to single outputs
+
+Configuration Spécifique de ReaChannelMap pour Ganger les Canaux
+Installation et Accès:
+Télécharger ReaPlugs: www.reaper.fm/reaplugs/
+Installer dans le dossier VST d'OBS (généralement C:\Program Files\obs-studio\obs-plugins\64bit\)
+Redémarrer OBS Studio
+Configuration dans OBS:
+Clic droit sur votre source "obs-evs-pcie-win-io source"
+Filtres ? + ? VST 2.x Plugin
+Sélectionner: ReaChannelMap
+Ouvrir l'interface du plugin
+Configuration ReaChannelMap pour 8 Paires Stéréo:
+Configuration Matrix (16 canaux ? 8 paires stéréo):
+
+INPUT (vos 16 canaux)    ?    OUTPUT (8 paires stéréo)
++-----------------------------------------------------+
+¦ Canal 1  ? Output Left 1    (Paire Stéréo A)       ¦
+¦ Canal 2  ? Output Right 1                           ¦
+¦ Canal 3  ? Output Left 2    (Paire Stéréo B)       ¦
+¦ Canal 4  ? Output Right 2                           ¦
+¦ Canal 5  ? Output Left 3    (Paire Stéréo C)       ¦
+¦ Canal 6  ? Output Right 3                           ¦
+¦ ...                                                 ¦
+¦ Canal 15 ? Output Left 8    (Paire Stéréo H)       ¦
+¦ Canal 16 ? Output Right 8                           ¦
++-----------------------------------------------------+
+
+Interface ReaChannelMap - Étapes Détaillées:
+1. Configuration des Inputs:
+Inputs: Mettre à 16 (vos 16 canaux source)
+Outputs: Mettre à 16 (8 paires × 2 canaux)
+2. Matrice de Routage:
+Dans la grille, pour chaque paire:
+
+Paire Stéréo 1 (Canaux 1+2):
+- Input 1 ? Output 1 (Left):  Gain = 1.0
+- Input 2 ? Output 2 (Right): Gain = 1.0
+
+Paire Stéréo 2 (Canaux 3+4):
+- Input 3 ? Output 3 (Left):  Gain = 1.0
+- Input 4 ? Output 4 (Right): Gain = 1.0
+
+3. Contrôles Avancés:
+
+Pour chaque paire, vous pouvez:
++- Gain individuel par canal (-8 à +12dB)
++- Pan control (si mono ? stéréo)
++- Phase invert (bouton f)
++- Mute individuel par canal
++- Solo pour isolation
+
+Presets Recommandés:
+Preset 1: 8 Paires Stéréo Simples
+
+Channels 1+2  ? Stereo Pair A (Sine 440Hz + 550Hz)
+Channels 3+4  ? Stereo Pair B (Sine 660Hz + 770Hz)
+Channels 5+6  ? Stereo Pair C (Sine 880Hz + 990Hz)
+Channels 7+8  ? Stereo Pair D (Sine 1100Hz + 1210Hz)
+Channels 9-16 ? Disabled ou gain = 0
+
+Preset 2: Mix Créatif
+
+Channels 1+3  ? Stereo Pair A (Mix harmonies)
+Channels 2+4  ? Stereo Pair B (Mix complémentaires)
+Channels 5+7  ? Stereo Pair C
+Channels 6+8  ? Stereo Pair D
+Contrôle en Temps Réel:
+? Gain temps réel pour chaque canal
+? Mute instantané par paire
+? Monitoring par canal ou paire
+? Sauvegarde des réglages dans la scène OBS
+Cette configuration vous donnera un contrôle total sur le groupement de vos 16 canaux en paires stéréo, avec la possibilité d'appliquer des effets différents
+sur chaque paire par la suite!
+
+Persistence:
+OBS Handles Persistence Automatically:
+? Scene Collection Files: Settings saved in .json files
+? Source Duplication: Settings copied when duplicating sources
+? Scene Switching: Settings maintained across scene changes
+? OBS Restart: All settings restored on restart
+3. Where Settings Are Stored:
+
+Windows: %APPDATA%\obs-studio\basic\scenes\*.json
+Each scene collection contains:
+{
+  "sources": [
+    {
+      "id": "obs-evs-pcie-win-io",
+      "settings": {
+        "use_sine_generator": true,
+        "split_audio_mode": false,
+        "sine_enabled_1": true,
+        "sine_frequency_1": 440.0,
+        "sine_amplitude_1": 0.3,
+        // ... all your settings
+      }
+    }
+  ]
+}
+
+4. Your Plugin Property Flow:
+1. Source Creation ? v210_get_defaults() ? Sets initial values
+2. User Changes UI ? v210_update() ? Updates context variables
+3. OBS Auto-Save ? Settings written to scene collection
+4. OBS Restart ? Settings loaded ? v210_update() called with saved values
+
+Advanced Persistence Options (if needed):
+Manual Save/Load (rarely needed):
+// Save custom data
+obs_data_t *save_data = obs_save_source(source);
+// Load custom data
+obs_load_source(source, save_data);
+*/
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <obs-module.h>
 #include <plugin-support.h>
-#include <obs-frontend-api.h>
+// #include <obs-frontend-api.h>  // Comment out for now if it's causing build issues
 #include "PluginUtil.h"
 #include "AudioVideoHelper.h"
 #include "Shader.h"
 
 #define IN10BITS
-#define VIDEO_BAR //Max perf
-#define MOVING_BAR  //Low perf as we generate a full new picture at every frame
-#define AUDIO_SIN //Max perf
+#define VIDEO_BAR  // Max perf
+#define MOVING_BAR // Low perf as we generate a full new picture at every frame
+#define AUDIO_SIN  // Max perf
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
-constexpr const char *PLUGIN_INPUT_NAME = "obs-evs-pcie-win-io source";
+static const char *PLUGIN_INPUT_NAME = "obs-evs-pcie-win-io source";
+#define PLUGIN_AUDIO_CHANNELS 16
+
+// Structure for individual sine wave audio channels (Option 2)
+struct sine_channel_source
+{
+  obs_source_t *source;
+  uint32_t audio_sample_rate; // 48000 Hz
+  size_t audio_frame_size;    // bytes per audio frame
+  uint8_t *audio_buffer;
+  double audio_phase;
+  double audio_remainder_seconds;
+
+  // Sine wave parameters
+  double frequency;   // Frequency for this channel
+  double amplitude;   // Amplitude for this channel
+  bool enabled;       // Enable/disable this channel
+  int channel_number; // Channel number (1-16)
+};
 
 struct v210_source
 {
@@ -55,9 +244,8 @@ struct v210_source
   uint32_t height; // Video Height (e.g. 1080)
   uint32_t fps;
   size_t frame_size;
-  float q_alpha;   // The alpha value (default 255.0)
+  float q_alpha; // The alpha value (default 255.0)
   uint32_t line_pos;
-
 
   // Audio members
   FILE *audio_file;
@@ -68,7 +256,16 @@ struct v210_source
   double audio_phase;
   double audio_remainder_seconds;
 
-  //Perf
+  // Multi-channel sine wave parameters (16 channels)
+  double sine_frequencies[16];  // Frequency for each channel
+  double sine_amplitudes[16];   // Amplitude for each channel
+  bool sine_enabled[16];        // Enable/disable each channel
+  double sine_phases[16];       // Phase tracking for each channel
+  uint8_t *channel_buffers[16]; // Independent buffer for each channel (for separate mode)
+  bool use_sine_generator;      // Toggle between sine and file audio
+  bool split_audio_mode;        // Runtime control: true = separate sources, false = multi-channel
+
+  // Perf
   std::chrono::microseconds::rep DeltaTickInUs;
   std::chrono::high_resolution_clock::time_point TickIn;
   std::chrono::high_resolution_clock::time_point TickOut;
@@ -82,7 +279,7 @@ struct v210_source
 static const char *v210_get_name(void *type_data)
 {
   obs_log(LOG_INFO, ">>>v210_get_name %p->%s", type_data, PLUGIN_INPUT_NAME);
-  return PLUGIN_INPUT_NAME; 
+  return PLUGIN_INPUT_NAME;
 }
 
 static void *v210_create(obs_data_t *settings, obs_source_t *source)
@@ -115,11 +312,23 @@ static void *v210_create(obs_data_t *settings, obs_source_t *source)
   context->texture = gs_texture_create(context->width, context->height, GS_BGRA, 1, NULL, GS_DYNAMIC);
   obs_leave_graphics();
 
-  // Audio setup: 48 kHz, stereo (2 channels), 32-bit signed int
+  // Audio setup: 48 kHz, 16-channel, 32-bit signed int
   context->audio_sample_rate = 48000;
-  context->audio_channels = 1;
-  context->audio_frame_size = context->audio_channels * sizeof(int32_t) * 16 * 1024;
+  context->audio_channels = 16;                                 // 16-channel audio (mode-independent)
+  context->audio_frame_size = sizeof(int32_t) * 16 * 16 * 1024; // Large buffer for both modes
   context->audio_buffer = (uint8_t *)bmalloc(context->audio_frame_size);
+
+  // Initialize multi-channel sine wave parameters
+  context->use_sine_generator = true; // Default to sine generator
+  context->split_audio_mode = false;  // Default to multi-channel mode
+  for (int i = 0; i < 16; i++)
+  {
+    context->sine_frequencies[i] = 440.0 + (i * 110.0);                          // Different frequencies: 440, 550, 660...
+    context->sine_amplitudes[i] = 0.3;                                           // Default amplitude
+    context->sine_enabled[i] = (i < 2);                                          // Enable first 2 channels by default
+    context->sine_phases[i] = 0.0;                                               // Initialize phase
+    context->channel_buffers[i] = (uint8_t *)bmalloc(context->audio_frame_size); // Buffer per channel (for split mode)
+  }
 
   const char *p = obs_data_get_string(settings, "file_path");
   obs_log(LOG_INFO, ">>>v210_create obs_data_get_string '%s'", p);
@@ -137,7 +346,7 @@ static void *v210_create(obs_data_t *settings, obs_source_t *source)
   context->audio_file = fopen(path, "rb");
   obs_log(LOG_INFO, ">>>v210_create audio '%s' %p", path, context->audio_file);
 
-  context->q_alpha = 255.0f;   //128.0f; // 255.0f; // Default 0xFF
+  context->q_alpha = 255.0f; // 128.0f; // 255.0f; // Default 0xFF
 
   // Compile the Shader
   obs_enter_graphics();
@@ -176,6 +385,15 @@ static void v210_destroy(void *data)
   bfree(context->buffer);
   bfree(context->audio_buffer);
 
+  // Free channel buffers (always allocated now)
+  for (int i = 0; i < 16; i++)
+  {
+    if (context->channel_buffers[i])
+    {
+      bfree(context->channel_buffers[i]);
+    }
+  }
+
   obs_enter_graphics();
   if (context->texture)
   {
@@ -193,14 +411,14 @@ static void v210_destroy(void *data)
 static uint32_t v210_get_width(void *data)
 {
   v210_source *context = (v210_source *)data;
-  //obs_log(LOG_INFO, ">>>v210_get_width %p->%d", data, context->width);
+  // obs_log(LOG_INFO, ">>>v210_get_width %p->%d", data, context->width);
   return context->width;
 }
 
 static uint32_t v210_get_height(void *data)
 {
   v210_source *context = (v210_source *)data;
-  //obs_log(LOG_INFO, ">>>v210_get_height %p->%d", data, context->height);
+  // obs_log(LOG_INFO, ">>>v210_get_height %p->%d", data, context->height);
   return context->height;
 }
 
@@ -210,18 +428,85 @@ static obs_properties_t *v210_get_properties(void *data)
   obs_properties_t *props = obs_properties_create();
   obs_log(LOG_INFO, ">>>v210_get_properties %p->%p", data, props);
 
+  // Audio Source Type
+  obs_properties_add_bool(props, "use_sine_generator", "Use Sine Wave Generator (unchecked = use files)");
+
+  // Audio Mode Selection
+  obs_properties_add_bool(props, "split_audio_mode", "Split Audio Mode (checked = 16 separate sources, unchecked = single 16-channel source)");
+
   // Add a file picker for the Video File
   obs_properties_add_path(props, "video_file_path", "Video YUV File", OBS_PATH_FILE, "Raw Files (*.yuv8 *.yuv10)", nullptr);
 
   // Add a file picker for the Audio File
   obs_properties_add_path(props, "audio_file_path", "Audio PCM File", OBS_PATH_FILE, "PCM Files (*.pcm)", nullptr);
 
+  // Multi-channel sine wave controls
+  for (int i = 0; i < 16; i++)
+  {
+    char prop_name[64];
+    char prop_desc[64];
+
+    sprintf(prop_name, "sine_enabled_%d", i + 1);
+    sprintf(prop_desc, "Channel %d Enabled", i + 1);
+    obs_properties_add_bool(props, prop_name, prop_desc);
+
+    sprintf(prop_name, "sine_frequency_%d", i + 1);
+    sprintf(prop_desc, "Channel %d Frequency (Hz)", i + 1);
+    obs_properties_add_float_slider(props, prop_name, prop_desc, 20.0, 20000.0, 10.0);
+
+    sprintf(prop_name, "sine_amplitude_%d", i + 1);
+    sprintf(prop_desc, "Channel %d Amplitude", i + 1);
+    obs_properties_add_float_slider(props, prop_name, prop_desc, 0.0, 1.0, 0.01);
+  }
+
   return props;
+}
+static void v210_get_defaults(obs_data_t *settings)
+{
+  obs_log(LOG_INFO, ">>>v210_get_defaults %p", settings);
+
+  obs_data_set_default_bool(settings, "use_sine_generator", true);
+  obs_data_set_default_bool(settings, "split_audio_mode", false); // Default to multi-channel mode
+
+  // Set defaults for multi-channel sine waves
+  for (int i = 0; i < 16; i++)
+  {
+    char prop_name[64];
+
+    sprintf(prop_name, "sine_enabled_%d", i + 1);
+    obs_data_set_default_bool(settings, prop_name, (i < 8)); // Enable first 8 channels
+
+    sprintf(prop_name, "sine_frequency_%d", i + 1);
+    obs_data_set_default_double(settings, prop_name, 440.0 + (i * 110.0)); // Different frequencies
+
+    sprintf(prop_name, "sine_amplitude_%d", i + 1);
+    obs_data_set_default_double(settings, prop_name, 0.3);
+  }
 }
 static void v210_update(void *data, obs_data_t *settings)
 {
   auto *context = (v210_source *)data;
   obs_log(LOG_INFO, ">>>v210_update %p %p", data, settings);
+
+  // Update sine generator toggle
+  context->use_sine_generator = obs_data_get_bool(settings, "use_sine_generator");
+  context->split_audio_mode = obs_data_get_bool(settings, "split_audio_mode");
+
+  // Update multi-channel sine wave settings
+  for (int i = 0; i < 16; i++)
+  {
+    char prop_name[64];
+
+    sprintf(prop_name, "sine_enabled_%d", i + 1);
+    context->sine_enabled[i] = obs_data_get_bool(settings, prop_name);
+
+    sprintf(prop_name, "sine_frequency_%d", i + 1);
+    context->sine_frequencies[i] = obs_data_get_double(settings, prop_name);
+
+    sprintf(prop_name, "sine_amplitude_%d", i + 1);
+    context->sine_amplitudes[i] = obs_data_get_double(settings, prop_name);
+  }
+
   // 1. Handle Video File Update
   const char *video_path = obs_data_get_string(settings, "video_file_path");
   if (video_path && *video_path)
@@ -245,7 +530,6 @@ static void v210_update(void *data, obs_data_t *settings)
     context->audio_file = fopen(audio_path, "rb");
     obs_log(LOG_INFO, "Audio source updated to: %s", audio_path);
   }
-
 }
 static void v210_video_tick(void *data, float seconds)
 {
@@ -269,49 +553,104 @@ static void v210_video_tick(void *data, float seconds)
   context->audio_remainder_seconds -= (double)samples_to_generate / context->audio_sample_rate;
   int32_t *pSample_S32 = (int32_t *)context->audio_buffer;
 
-#if defined(AUDIO_SIN)
-  if (samples_to_generate > 0)
+  if (context->use_sine_generator && samples_to_generate > 0)
   {
-    GenerateAudioSinusData(440.0, 0.5 * 0x7FFFFFFF, (double)context->audio_sample_rate, samples_to_generate, pSample_S32, context->audio_phase);
-  }
-#else
-  // --- FILE READING ---
-  if (context->audio_file)
-  {
-    // 1. Read the mono samples
-    size_t audio_read = fread(pSample_S32, sizeof(int32_t), samples_to_generate, context->audio_file);
-
-    // Handle Looping
-    if (audio_read < samples_to_generate)
+    if (context->split_audio_mode)
     {
-      fseek(context->audio_file, 0, SEEK_SET);
-      fread(pSample_S32 + audio_read, sizeof(int32_t), samples_to_generate - audio_read, context->audio_file);
-    }
+      // Option 2: Individual channels are handled by separate sources
+      // This main source only generates a simple test tone
+      GenerateAudioSinusData(440.0, 0.3 * 0x7FFFFFFF, (double)context->audio_sample_rate, samples_to_generate, pSample_S32, context->audio_phase);
 
-    // 2. Scale 24-bit sign-extended to 32-bit Full Scale
-    // Use a separate index to avoid modifying the base pointer 'pSample_S32'
-    for (uint32_t i = 0; i < samples_to_generate; i++)
+      // Output single test audio
+      struct obs_source_audio audio_frame = {0};
+      audio_frame.data[0] = context->audio_buffer;
+      audio_frame.frames = samples_to_generate;
+      audio_frame.speakers = SPEAKERS_MONO;
+      audio_frame.samples_per_sec = context->audio_sample_rate;
+      audio_frame.format = AUDIO_FORMAT_32BIT;
+      audio_frame.timestamp = obs_get_video_frame_time() - util_mul_div64(samples_to_generate, 1000000000ULL, context->audio_sample_rate);
+      obs_source_output_audio(context->source, &audio_frame);
+    }
+    else
     {
-      // Shift left by 8 to move the 24-bit data to the top of the 32-bit container
-      //  pSample_S32[i] = pSample_S32[i] << 8;
+      // Option 3: Generate proper 16-channel interleaved audio
+      // Clear buffer first
+      memset(pSample_S32, 0, samples_to_generate * 16 * sizeof(int32_t));
+
+      // Generate each enabled channel into interleaved buffer
+      for (int channel = 0; channel < 16; channel++)
+      {
+        if (context->sine_enabled[channel])
+        {
+          double amplitude = context->sine_amplitudes[channel] * 0x7FFFFFFF;
+
+          // Generate samples for this channel
+          for (uint32_t sample = 0; sample < samples_to_generate; sample++)
+          {
+            int32_t sample_value = (int32_t)(amplitude * sin(context->sine_phases[channel]));
+            // Interleaved: sample_index = sample * 16 + channel
+            pSample_S32[sample * 16 + channel] = sample_value;
+
+            // Update phase
+            context->sine_phases[channel] += (2.0 * M_PI * context->sine_frequencies[channel]) / context->audio_sample_rate;
+            if (context->sine_phases[channel] > 2.0 * M_PI)
+            {
+              context->sine_phases[channel] -= 2.0 * M_PI;
+            }
+          }
+        }
+      }
+
+      // Output 16-channel interleaved audio
+      struct obs_source_audio audio_frame = {0};
+      audio_frame.data[0] = context->audio_buffer;
+      audio_frame.frames = samples_to_generate;
+      audio_frame.speakers = SPEAKERS_UNKNOWN; // 16-channel layout
+      audio_frame.samples_per_sec = context->audio_sample_rate;
+      audio_frame.format = AUDIO_FORMAT_32BIT;
+      audio_frame.timestamp = obs_get_video_frame_time() - util_mul_div64(samples_to_generate, 1000000000ULL, context->audio_sample_rate);
+      obs_source_output_audio(context->source, &audio_frame);
     }
   }
-  else
+  else if (!context->use_sine_generator)
   {
-    // Fallback: If no file, output silence so the mixer doesn't "freeze"
-    memset(pSample_S32, 0, samples_to_generate * sizeof(int32_t));
+    // --- FILE READING ---
+    if (context->audio_file)
+    {
+      // 1. Read the mono samples
+      size_t audio_read = fread(pSample_S32, sizeof(int32_t), samples_to_generate, context->audio_file);
+
+      // Handle Looping
+      if (audio_read < samples_to_generate)
+      {
+        fseek(context->audio_file, 0, SEEK_SET);
+        fread(pSample_S32 + audio_read, sizeof(int32_t), samples_to_generate - audio_read, context->audio_file);
+      }
+
+      // 2. Scale 24-bit sign-extended to 32-bit Full Scale
+      // Use a separate index to avoid modifying the base pointer 'pSample_S32'
+      for (uint32_t i = 0; i < samples_to_generate; i++)
+      {
+        // Shift left by 8 to move the 24-bit data to the top of the 32-bit container
+        //  pSample_S32[i] = pSample_S32[i] << 8;
+      }
+
+      // Output file-based audio
+      struct obs_source_audio audio_frame = {0};
+      audio_frame.data[0] = context->audio_buffer;
+      audio_frame.frames = samples_to_generate;
+      audio_frame.speakers = SPEAKERS_MONO;
+      audio_frame.samples_per_sec = context->audio_sample_rate;
+      audio_frame.format = AUDIO_FORMAT_32BIT;
+      audio_frame.timestamp = obs_get_video_frame_time() - util_mul_div64(samples_to_generate, 1000000000ULL, context->audio_sample_rate);
+      obs_source_output_audio(context->source, &audio_frame);
+    }
+    else
+    {
+      // Fallback: If no file, output silence so the mixer doesn't "freeze"
+      memset(pSample_S32, 0, samples_to_generate * sizeof(int32_t));
+    }
   }
-#endif
-  // 3. Output the frame
-  struct obs_source_audio audio_frame = {0};
-  audio_frame.data[0] = context->audio_buffer;
-  audio_frame.frames = samples_to_generate; // MUST match the loop count
-  audio_frame.speakers = SPEAKERS_MONO;
-  audio_frame.samples_per_sec = context->audio_sample_rate;
-  audio_frame.format = AUDIO_FORMAT_32BIT;
-  // audio_frame.timestamp = obs_get_video_frame_time();
-  audio_frame.timestamp = obs_get_video_frame_time() - util_mul_div64(samples_to_generate, 1000000000ULL, context->audio_sample_rate);
-  obs_source_output_audio(context->source, &audio_frame);
   context->TickOut = std::chrono::high_resolution_clock::now();
   context->TickElapsedTimeInUs = std::chrono::duration_cast<std::chrono::microseconds>(context->TickOut - context->TickIn).count();
   obs_log(LOG_INFO, ">>>v210_video_tick Delta %lld Elapsed %lld uS", context->DeltaTickInUs, context->TickElapsedTimeInUs);
@@ -431,13 +770,322 @@ struct obs_source_info v210_source_info = {
     .destroy = v210_destroy,
     .get_width = v210_get_width,
     .get_height = v210_get_height,
+    .get_defaults = v210_get_defaults,
     .get_properties = v210_get_properties,
     .update = v210_update,
-    .video_tick = v210_video_tick, 
+    .video_tick = v210_video_tick,
     .video_render = v210_video_render,
 };
 
+// Individual Sine Channel Source Functions (Option 2)
+static const char *sine_channel_get_name(void *type_data)
+{
+  // Return a generic name, specific channel number will be set during registration
+  return "Sine Channel";
+}
 
+static void *sine_channel_create(obs_data_t *settings, obs_source_t *source)
+{
+  sine_channel_source *context = (sine_channel_source *)bzalloc(sizeof(sine_channel_source));
+  context->source = source;
+
+  // Audio setup: 48 kHz, mono, 32-bit signed int
+  context->audio_sample_rate = 48000;
+  context->audio_frame_size = sizeof(int32_t) * 16 * 1024;
+  context->audio_buffer = (uint8_t *)bmalloc(context->audio_frame_size);
+  context->audio_phase = 0.0;
+  context->audio_remainder_seconds = 0.0;
+
+  // Default sine wave parameters - will be overridden by settings
+  context->frequency = 440.0;
+  context->amplitude = 0.3;
+  context->enabled = true;
+  context->channel_number = 1;
+
+  return context;
+}
+
+static void sine_channel_destroy(void *data)
+{
+  sine_channel_source *context = (sine_channel_source *)data;
+  if (context->audio_buffer)
+  {
+    bfree(context->audio_buffer);
+  }
+  bfree(context);
+}
+
+static obs_properties_t *sine_channel_get_properties(void *data)
+{
+  obs_properties_t *props = obs_properties_create();
+
+  obs_properties_add_bool(props, "enabled", "Enabled");
+  obs_properties_add_float_slider(props, "frequency", "Frequency (Hz)", 20.0, 20000.0, 10.0);
+  obs_properties_add_float_slider(props, "amplitude", "Amplitude", 0.0, 1.0, 0.01);
+
+  return props;
+}
+
+static void sine_channel_get_defaults(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", true);
+  obs_data_set_default_double(settings, "frequency", 440.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+
+static void sine_channel_update(void *data, obs_data_t *settings)
+{
+  sine_channel_source *context = (sine_channel_source *)data;
+
+  context->enabled = obs_data_get_bool(settings, "enabled");
+  context->frequency = obs_data_get_double(settings, "frequency");
+  context->amplitude = obs_data_get_double(settings, "amplitude");
+}
+
+static void sine_channel_tick(void *data, float seconds)
+{
+  sine_channel_source *context = (sine_channel_source *)data;
+
+  if (!context->source || !context->enabled)
+  {
+    return;
+  }
+
+  // Add current frame time to our accumulator
+  context->audio_remainder_seconds += (double)seconds;
+
+  // Calculate exactly how many whole samples fit into our accumulated time
+  uint32_t samples_to_generate = (uint32_t)(context->audio_sample_rate * context->audio_remainder_seconds);
+
+  // Subtract the time we are actually using from the accumulator
+  context->audio_remainder_seconds -= (double)samples_to_generate / context->audio_sample_rate;
+
+  if (samples_to_generate > 0)
+  {
+    int32_t *pSample_S32 = (int32_t *)context->audio_buffer;
+    double amplitude = context->amplitude * 0x7FFFFFFF;
+
+    // Generate sine wave using existing function
+    GenerateAudioSinusData(context->frequency, amplitude, (double)context->audio_sample_rate, samples_to_generate, pSample_S32, context->audio_phase);
+
+    // Output the audio frame
+    struct obs_source_audio audio_frame = {0};
+    audio_frame.data[0] = context->audio_buffer;
+    audio_frame.frames = samples_to_generate;
+    audio_frame.speakers = SPEAKERS_MONO;
+    audio_frame.samples_per_sec = context->audio_sample_rate;
+    audio_frame.format = AUDIO_FORMAT_32BIT;
+    audio_frame.timestamp = obs_get_video_frame_time() - util_mul_div64(samples_to_generate, 1000000000ULL, context->audio_sample_rate);
+
+    obs_source_output_audio(context->source, &audio_frame);
+  }
+}
+
+// Create 16 separate source info structures
+struct obs_source_info sine_channel_source_infos[16];
+
+// Static strings for source IDs and names
+static char sine_source_ids[16][64];
+static char sine_source_names[16][64];
+
+// Static name functions for each channel
+static const char *sine_channel_get_name_0(void *)
+{
+  return sine_source_names[0];
+}
+static const char *sine_channel_get_name_1(void *)
+{
+  return sine_source_names[1];
+}
+static const char *sine_channel_get_name_2(void *)
+{
+  return sine_source_names[2];
+}
+static const char *sine_channel_get_name_3(void *)
+{
+  return sine_source_names[3];
+}
+static const char *sine_channel_get_name_4(void *)
+{
+  return sine_source_names[4];
+}
+static const char *sine_channel_get_name_5(void *)
+{
+  return sine_source_names[5];
+}
+static const char *sine_channel_get_name_6(void *)
+{
+  return sine_source_names[6];
+}
+static const char *sine_channel_get_name_7(void *)
+{
+  return sine_source_names[7];
+}
+static const char *sine_channel_get_name_8(void *)
+{
+  return sine_source_names[8];
+}
+static const char *sine_channel_get_name_9(void *)
+{
+  return sine_source_names[9];
+}
+static const char *sine_channel_get_name_10(void *)
+{
+  return sine_source_names[10];
+}
+static const char *sine_channel_get_name_11(void *)
+{
+  return sine_source_names[11];
+}
+static const char *sine_channel_get_name_12(void *)
+{
+  return sine_source_names[12];
+}
+static const char *sine_channel_get_name_13(void *)
+{
+  return sine_source_names[13];
+}
+static const char *sine_channel_get_name_14(void *)
+{
+  return sine_source_names[14];
+}
+static const char *sine_channel_get_name_15(void *)
+{
+  return sine_source_names[15];
+}
+
+// Static defaults functions for each channel
+static void sine_channel_get_defaults_0(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", true);
+  obs_data_set_default_double(settings, "frequency", 440.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_1(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", true);
+  obs_data_set_default_double(settings, "frequency", 550.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_2(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", false);
+  obs_data_set_default_double(settings, "frequency", 660.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_3(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", false);
+  obs_data_set_default_double(settings, "frequency", 770.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_4(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", false);
+  obs_data_set_default_double(settings, "frequency", 880.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_5(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", false);
+  obs_data_set_default_double(settings, "frequency", 990.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_6(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", false);
+  obs_data_set_default_double(settings, "frequency", 1100.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_7(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", false);
+  obs_data_set_default_double(settings, "frequency", 1210.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_8(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", false);
+  obs_data_set_default_double(settings, "frequency", 1320.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_9(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", false);
+  obs_data_set_default_double(settings, "frequency", 1430.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_10(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", false);
+  obs_data_set_default_double(settings, "frequency", 1540.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_11(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", false);
+  obs_data_set_default_double(settings, "frequency", 1650.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_12(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", false);
+  obs_data_set_default_double(settings, "frequency", 1760.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_13(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", false);
+  obs_data_set_default_double(settings, "frequency", 1870.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_14(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", false);
+  obs_data_set_default_double(settings, "frequency", 1980.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+static void sine_channel_get_defaults_15(obs_data_t *settings)
+{
+  obs_data_set_default_bool(settings, "enabled", false);
+  obs_data_set_default_double(settings, "frequency", 2090.0);
+  obs_data_set_default_double(settings, "amplitude", 0.3);
+}
+
+// Array of function pointers
+static const char *(*sine_get_name_functions[])(void *) = {
+    sine_channel_get_name_0,  sine_channel_get_name_1,  sine_channel_get_name_2,  sine_channel_get_name_3, sine_channel_get_name_4,  sine_channel_get_name_5,
+    sine_channel_get_name_6,  sine_channel_get_name_7,  sine_channel_get_name_8,  sine_channel_get_name_9, sine_channel_get_name_10, sine_channel_get_name_11,
+    sine_channel_get_name_12, sine_channel_get_name_13, sine_channel_get_name_14, sine_channel_get_name_15};
+
+static void (*sine_get_defaults_functions[])(obs_data_t *) = {
+    sine_channel_get_defaults_0,  sine_channel_get_defaults_1,  sine_channel_get_defaults_2,  sine_channel_get_defaults_3,
+    sine_channel_get_defaults_4,  sine_channel_get_defaults_5,  sine_channel_get_defaults_6,  sine_channel_get_defaults_7,
+    sine_channel_get_defaults_8,  sine_channel_get_defaults_9,  sine_channel_get_defaults_10, sine_channel_get_defaults_11,
+    sine_channel_get_defaults_12, sine_channel_get_defaults_13, sine_channel_get_defaults_14, sine_channel_get_defaults_15};
+
+// Function to initialize all 16 sine channel sources
+void initialize_sine_channel_sources()
+{
+  for (int i = 0; i < 16; i++)
+  {
+    sprintf(sine_source_ids[i], "sine_channel_%d", i + 1);
+    sprintf(sine_source_names[i], "Sine Channel %d", i + 1);
+
+    sine_channel_source_infos[i] = {
+        .id = sine_source_ids[i],
+        .type = OBS_SOURCE_TYPE_INPUT,
+        .output_flags = OBS_SOURCE_AUDIO,
+        .get_name = sine_get_name_functions[i],
+        .create = sine_channel_create,
+        .destroy = sine_channel_destroy,
+        .get_defaults = sine_get_defaults_functions[i],
+        .get_properties = sine_channel_get_properties,
+        .update = sine_channel_update,
+        .video_tick = sine_channel_tick,
+    };
+  }
+}
 
 bool obs_module_load(void)
 {
@@ -489,16 +1137,26 @@ gs_stage_texture(): Used to move the frame data from the GPU to the CPU if you n
 
   */
   obs_register_source(&v210_source_info);
-  //obs_register_source(&udp_stream_filter_info);
-  //obs_register_output(&raw_dump_info);
-  // Add a button to the Tools menu
-  obs_frontend_add_tools_menu_item("Toggle Raw Stream Dump", on_menu_click, nullptr);
+
+  // Always register 16 separate sine channel sources for Option 2
+  obs_log(LOG_INFO, "Registering 16 individual sine channel sources");
+  initialize_sine_channel_sources();
+  for (int i = 0; i < 16; i++)
+  {
+    obs_register_source(&sine_channel_source_infos[i]);
+    obs_log(LOG_INFO, "Registered sine channel %d", i + 1);
+  }
+  obs_log(LOG_INFO, "Both audio modes available - use 'Split Audio Mode' property to switch");
+
+  // obs_register_source(&udp_stream_filter_info);
+  // obs_register_output(&raw_dump_info);
+  //  Add a button to the Tools menu
+  // obs_frontend_add_tools_menu_item("Toggle Raw Stream Dump", on_menu_click, nullptr);
 
   obs_log(LOG_INFO, "obs_module_load returns %s", Rts_B ? "true" : "false");
   // ADD_MESSAGE(EvsHwLGPL::SEV_INFO, "hello world\n");
   return Rts_B;
 }
-
 
 extern "C" void obs_module_unload(void)
 {
@@ -937,7 +1595,7 @@ static void raw_video_render(void *data, gs_effect_t *effect)
   }
 #endif
 
-  #if defined(IN10BITS)
+#if defined(IN10BITS)
   auto t1 = std::chrono::high_resolution_clock::now();
   // Convert v210 to UYVY
   // v210_to_uyvy_avx2_vcl((const uint32_t *)context->buffer, context->buffer, context->width, context->height);
@@ -1375,7 +2033,7 @@ static void raw_dump_audio(void *data, struct audio_data *frames)
 
   // Audio is planar. We write Channel 0 then Channel 1 etc.
   // OBS Audio is typically 32-bit Float.
-  for (int i = 0; i < MAX_AUDIO_CHANNELS; i++)
+  for (int i = 0; i < PLUGIN_AUDIO_CHANNELS; i++)
   {
     if (frames->data[i])
     {

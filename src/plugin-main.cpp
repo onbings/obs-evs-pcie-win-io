@@ -28,7 +28,7 @@ srt://127.0.0.1:9001?mode=listener&latency=50000
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
-static const char *PLUGIN_INPUT_NAME = "obs-evs-pcie-win-io video/audio pSource_X";
+static const char *PLUGIN_INPUT_NAME = "obs-evs-pcie-win-io video/audio source";
 constexpr uint32_t PLUGIN_MAX_AUDIO_CHANNELS = 16;
 
 // Property string constants
@@ -170,6 +170,36 @@ static void AudioEngineInit(AudioEngine *_pAudioEngine_X, obs_source_t *_pSource
   _pAudioEngine_X->AudioPhase_lf = 0.0;
   _pAudioEngine_X->IsMultichannel_B = _IsMultichannel_B;
 
+#if 0
+ uint32_t i_U32;
+uint8_t *pAudioBuffer_U8;
+constexpr uint32_t MAX_AUDIO_BUFFER_SIZE = (sizeof(int32_t) * 8 * 1024);
+_pAudioEngine_X->pAudioSource_X = _pSource_X;
+_pAudioEngine_X->AudioSampleRate_U32 = 48000;
+_pAudioEngine_X->AudioRemainderSecond_lf = 0.0;
+_pAudioEngine_X->AudioPhase_lf = 0.0;
+_pAudioEngine_X->IsMultichannel_B = _IsMultichannel_B;
+
+_pAudioEngine_X->NbAudioChannel_U32 = _IsMultichannel_B ? PLUGIN_MAX_AUDIO_CHANNELS:1;
+_pAudioEngine_X->AudioFrameSize = MAX_AUDIO_BUFFER_SIZE;
+pAudioBuffer_U8 = (uint8_t *)bmalloc(_pAudioEngine_X->AudioFrameSize * _pAudioEngine_X->NbAudioChannel_U32);
+  for (i_U32 = 0; i_U32 < PLUGIN_MAX_AUDIO_CHANNELS; i_U32++, pAudioBuffer_U8+=)
+  {
+    _pAudioEngine_X->pSineFrequency_lf[i_U32] = 440.0 + (i_U32 * 110.0);
+    _pAudioEngine_X->pSineAmplitude_lf[i_U32] = 0.3;
+    _pAudioEngine_X->pSineEnabled_B[i_U32] = (i_U32 < 2);
+    _pAudioEngine_X->pSinePhase_lf[i_U32] = 0.0;
+    if (_IsMultichannel_B)
+    {
+      _pAudioEngine_X->pAudioChannelBuffer_U8[i_U32] = pAudioBuffer_U8;
+      pAudioBuffer_U8 += MAX_AUDIO_BUFFER_SIZE;
+    }
+    else
+    {
+      _pAudioEngine_X->pAudioChannelBuffer_U8[i_U32] = (i_U32 == 0) ? pAudioBuffer_U8:nullptr;
+    }
+  }
+#else
   if (_IsMultichannel_B)
   {
     _pAudioEngine_X->NbAudioChannel_U32 = PLUGIN_MAX_AUDIO_CHANNELS;

@@ -56,8 +56,8 @@ set(EVS_PCIE_WIN_IO_ROOT "C:/bld/evs-pcie-win-io/package/api" CACHE PATH "Root d
 set(EVS_PCIE_WIN_IO_INCLUDE_DIR "${EVS_PCIE_WIN_IO_ROOT}" CACHE PATH "Path to evs-pcie-win-io include directory")
 set(EVS_PCIE_WIN_IO_LIB_DEBUG   "${EVS_PCIE_WIN_IO_ROOT}/Debug/libevs-pcie-win-io-api.lib" CACHE FILEPATH "Debug import library for evs-pcie-win-io")
 set(EVS_PCIE_WIN_IO_LIB_RELEASE "${EVS_PCIE_WIN_IO_ROOT}/Release/libevs-pcie-win-io-api.lib" CACHE FILEPATH "Release import library for evs-pcie-win-io")
-set(ROOT_PRO_DIR "E:/pro")
-#set(ROOT_PRO_DIR "C:/pro/home")
+#set(ROOT_PRO_DIR "E:/pro")
+set(ROOT_PRO_DIR "C:/pro/home")
 # Root rundir for OBS Studio runtime copies; final path will append configuration and plugin subpath
 set(OBS_STUDIO_RUNDIR_ROOT "${ROOT_PRO_DIR}/obs-studio/build_x64/rundir" CACHE PATH "Root rundir where OBS build places runtimes (plugin path will be <ROOT>/$<CONFIG>/obs-plugins/64bit)")
 

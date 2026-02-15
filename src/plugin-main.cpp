@@ -76,36 +76,34 @@ enum AUDIO_SOURCE_TYPE
   AUDIO_SOURCE_FILE = 1,
   AUDIO_SOURCE_SINE_GENERATOR = 2
 };
+
+// Audio channel configuration structure
+struct AudioChannelConfig
+{
+  double SineFrequency_lf;         // Frequency for this channel
+  double SineAmplitude_lf;         // Amplitude for this channel
+  bool SineEnabled_B;              // Enable/disable this channel
+  double SinePhase_lf;             // Phase tracking for this channel
+  uint8_t *pAudioChannelBuffer_U8; // Audio buffer for this channel
+};
+
 // Shared Audio Engine structure to eliminate duplication
 struct AudioEngine
 {
-  obs_source_t *pAudioSource_X;   // OBS source pointer
-  uint32_t AudioSampleRate_U32;   // Audio sampling rate 48000 Hz
-  size_t AudioFrameSize;          // Number of bytes in pAudioBuffer_U8
-  uint8_t *pAudioBuffer_U8;       // Pointer to audio buffer
-  double AudioRemainderSecond_lf; // Accumulator for audio samples producer
-  double AudioPhase_lf;           // Audio phase for Sin generator
-
-  // Single channel sine parameters (for AudioChannelSource)
-  double AudioSinFrequency_lf; // Frequency for single channel
-  double AudioSinAmplitude_lf; // Amplitude for single channel
-  bool AudioChannelEnabled_B;  // Enable/disable for single channel
-
-  // Multi-channel sine parameters (for MultiMediaSource)
-  double pSineFrequency_lf[PLUGIN_MAX_AUDIO_CHANNELS];        // Frequency for each channel
-  double pSineAmplitude_lf[PLUGIN_MAX_AUDIO_CHANNELS];        // Amplitude for each channel
-  bool pSineEnabled_B[PLUGIN_MAX_AUDIO_CHANNELS];             // Enable/disable each channel
-  double pSinePhase_lf[PLUGIN_MAX_AUDIO_CHANNELS];            // Phase tracking for each channel
-  uint8_t *pAudioChannelBuffer_U8[PLUGIN_MAX_AUDIO_CHANNELS]; // Independent buffer for each channel
-  uint32_t NbAudioChannel_U32;                                // Number of audio channels
-  bool IsMultichannel_B;                                      // true=16-channel mode, false=single channel mode
+  obs_source_t *pAudioSource_X;                                        // OBS source pointer
+  uint32_t AudioSampleRate_U32;                                        // Audio sampling rate 48000 Hz
+  size_t AudioFrameSize;                                               // Number of bytes per channel buffer
+  double AudioRemainderSecond_lf;                                      // Accumulator for audio samples producer (used for all modes)
+  uint32_t NbAudioChannel_U32;                                         // Number of audio channels (1 or PLUGIN_MAX_AUDIO_CHANNELS)
+  bool IsAudioSplitMode_B;                                             // true=split mode (mono), false=multi-channel mode (16-ch interleaved)
+  AudioChannelConfig pAudioChannelConfig_X[PLUGIN_MAX_AUDIO_CHANNELS]; // Channel configurations (only [0] used in split mode)
 };
 
 // Structure for individual sine wave audio channels (Option 2)
 struct AudioChannelSource
 {
-  AudioEngine PluginAudioEngine; // Shared audio engine
-  int channel_number;      // Channel number (1-16)
+  AudioEngine AudioEngine_X;       // Shared audio engine
+  uint32_t AudioChannelNumber_U32; // Channel number (1-16)
 };
 
 struct MultiMediaSource
@@ -122,23 +120,33 @@ struct MultiMediaSource
   gs_eparam_t *pShaderParamAlpha_X; // Alpha parameter
 
   // Data handling
-  uint8_t *pVideoBuffer_U8;   // Pointer to your video data buffer
-  uint32_t VideoWidth_U32;    // Video Width (e.g. 1920)
-  uint32_t VideoHeight_U32;   // Video Height (e.g. 1080)
-  size_t VideoFrameSize;      //  Size of a single video frame in bytes
+  double VideoFrameRate_lf;        // Video frame rate (e.g. 29.97)
+  double VideoFrameAccumulator_lf; // Accumulator for video frame timing
+  uint8_t *pVideoBuffer_U8;        // Pointer to your video data buffer
+  uint32_t VideoWidth_U32;         // Video Width (e.g. 1920)
+  uint32_t VideoHeight_U32;        // Video Height (e.g. 1080)
+  uint32_t VideoFrameSize_U32;     //  Size of a single video frame in bytes
+  uint32_t VideoLineStride_U32;    // A video line stride is the number of bytes per row in a video frame buffer, including any padding/alignment added by the
+                                   // hardware or driver.
+  uint32_t TextureWidth_U32;       // Width of the GPU texture in pixels
+  /*
+  Width: 1920 pixels
+  Format: UYVY (2 bytes per pixel)                  Stride: 1920 × 2 = 3840 bytes per row
+  Format: V210 (10-bit packed, ~4 bytes per pixel)  Stride: ((1920 + 47) / 48) × 128 = 5,120 bytes per row
+  */
   float Alpha_f;              // The alpha value (default 255.0)
   uint32_t MovingLinePos_U32; // Current position of the line in the color bar
 
   // Audio members
-  FILE *pAudioFile_X;      // Audio file handle
-  AudioEngine PluginAudioEngine; // Shared audio engine
+  FILE *pAudioFile_X;        // Audio file handle
+  AudioEngine AudioEngine_X; // Shared audio engine
   bool IsAudioSplitMode_B;   // Runtime control: true = separate sources, false = multi-channel
 
   // Runtime pSource_X selection variables
-  int VideoSourceType_E; // VIDEO_SOURCE_TYPE enum
-  int AudioSourceType_E; // AUDIO_SOURCE_TYPE enum
+  int VideoSourceType_E;         // VIDEO_SOURCE_TYPE enum
+  int AudioSourceType_E;         // AUDIO_SOURCE_TYPE enum
   bool IsLineInColorBarMoving_B; // Moving color bar option
-  bool IsVideoIn10bit_B;  // 10-bit vs 8-bit video
+  bool IsVideoIn10bit_B;         // 10-bit vs 8-bit video
 
   // Perf
   std::chrono::microseconds::rep DeltaTickInUs;
@@ -158,69 +166,43 @@ static char S_ppAudioSineSourceId[PLUGIN_MAX_AUDIO_CHANNELS][64];
 static char S_ppAudioSineSourceName_c[PLUGIN_MAX_AUDIO_CHANNELS][64];
 
 // Audio Engine Helper Functions
-static void AudioEngineInit(AudioEngine *_pAudioEngine_X, obs_source_t *_pSource_X, bool _IsMultichannel_B)
+static void AudioEngineInit(AudioEngine *_pAudioEngine_X, obs_source_t *_pSource_X, bool _IsAudioSplitMode_B)
 {
   uint32_t i_U32;
 
   _pAudioEngine_X->pAudioSource_X = _pSource_X;
   _pAudioEngine_X->AudioSampleRate_U32 = 48000;
-  _pAudioEngine_X->AudioFrameSize = sizeof(int32_t) * PLUGIN_MAX_AUDIO_CHANNELS * 16 * 1024;
-  _pAudioEngine_X->pAudioBuffer_U8 = (uint8_t *)bmalloc(_pAudioEngine_X->AudioFrameSize);
+  _pAudioEngine_X->AudioFrameSize = sizeof(int32_t) * 16 * 1024; // Buffer size per channel
   _pAudioEngine_X->AudioRemainderSecond_lf = 0.0;
-  _pAudioEngine_X->AudioPhase_lf = 0.0;
-  _pAudioEngine_X->IsMultichannel_B = _IsMultichannel_B;
+  _pAudioEngine_X->IsAudioSplitMode_B = _IsAudioSplitMode_B;
 
-#if 0
- uint32_t i_U32;
-uint8_t *pAudioBuffer_U8;
-constexpr uint32_t MAX_AUDIO_BUFFER_SIZE = (sizeof(int32_t) * 8 * 1024);
-_pAudioEngine_X->pAudioSource_X = _pSource_X;
-_pAudioEngine_X->AudioSampleRate_U32 = 48000;
-_pAudioEngine_X->AudioRemainderSecond_lf = 0.0;
-_pAudioEngine_X->AudioPhase_lf = 0.0;
-_pAudioEngine_X->IsMultichannel_B = _IsMultichannel_B;
+  if (_IsAudioSplitMode_B)
+  {
+    // Split mode: allocate buffer only for channel 0 (mono output)
+    _pAudioEngine_X->NbAudioChannel_U32 = 1;
+    _pAudioEngine_X->pAudioChannelConfig_X[0].SineFrequency_lf = 440.0;
+    _pAudioEngine_X->pAudioChannelConfig_X[0].SineAmplitude_lf = 0.3;
+    _pAudioEngine_X->pAudioChannelConfig_X[0].SineEnabled_B = true;
+    _pAudioEngine_X->pAudioChannelConfig_X[0].SinePhase_lf = 0.0;
+    _pAudioEngine_X->pAudioChannelConfig_X[0].pAudioChannelBuffer_U8 = (uint8_t *)bmalloc(_pAudioEngine_X->AudioFrameSize);
 
-_pAudioEngine_X->NbAudioChannel_U32 = _IsMultichannel_B ? PLUGIN_MAX_AUDIO_CHANNELS:1;
-_pAudioEngine_X->AudioFrameSize = MAX_AUDIO_BUFFER_SIZE;
-pAudioBuffer_U8 = (uint8_t *)bmalloc(_pAudioEngine_X->AudioFrameSize * _pAudioEngine_X->NbAudioChannel_U32);
-  for (i_U32 = 0; i_U32 < PLUGIN_MAX_AUDIO_CHANNELS; i_U32++, pAudioBuffer_U8+=)
-  {
-    _pAudioEngine_X->pSineFrequency_lf[i_U32] = 440.0 + (i_U32 * 110.0);
-    _pAudioEngine_X->pSineAmplitude_lf[i_U32] = 0.3;
-    _pAudioEngine_X->pSineEnabled_B[i_U32] = (i_U32 < 2);
-    _pAudioEngine_X->pSinePhase_lf[i_U32] = 0.0;
-    if (_IsMultichannel_B)
+    // Set all other channel pointers to nullptr
+    for (i_U32 = 1; i_U32 < PLUGIN_MAX_AUDIO_CHANNELS; i_U32++)
     {
-      _pAudioEngine_X->pAudioChannelBuffer_U8[i_U32] = pAudioBuffer_U8;
-      pAudioBuffer_U8 += MAX_AUDIO_BUFFER_SIZE;
-    }
-    else
-    {
-      _pAudioEngine_X->pAudioChannelBuffer_U8[i_U32] = (i_U32 == 0) ? pAudioBuffer_U8:nullptr;
-    }
-  }
-#else
-  if (_IsMultichannel_B)
-  {
-    _pAudioEngine_X->NbAudioChannel_U32 = PLUGIN_MAX_AUDIO_CHANNELS;
-    for (i_U32 = 0; i_U32 < PLUGIN_MAX_AUDIO_CHANNELS; i_U32++)
-    {
-      _pAudioEngine_X->pSineFrequency_lf[i_U32] = 440.0 + (i_U32 * 110.0);
-      _pAudioEngine_X->pSineAmplitude_lf[i_U32] = 0.3;
-      _pAudioEngine_X->pSineEnabled_B[i_U32] = (i_U32 < 2);
-      _pAudioEngine_X->pSinePhase_lf[i_U32] = 0.0;
-      _pAudioEngine_X->pAudioChannelBuffer_U8[i_U32] = (uint8_t *)bmalloc(_pAudioEngine_X->AudioFrameSize);
+      _pAudioEngine_X->pAudioChannelConfig_X[i_U32].pAudioChannelBuffer_U8 = nullptr;
     }
   }
   else
   {
-    _pAudioEngine_X->NbAudioChannel_U32 = 1;
-    _pAudioEngine_X->AudioSinFrequency_lf = 440.0;
-    _pAudioEngine_X->AudioSinAmplitude_lf = 0.3;
-    _pAudioEngine_X->AudioChannelEnabled_B = true;
+    // Multi-channel mode: allocate separate buffers for each channel (16-ch interleaved output)
+    _pAudioEngine_X->NbAudioChannel_U32 = PLUGIN_MAX_AUDIO_CHANNELS;
     for (i_U32 = 0; i_U32 < PLUGIN_MAX_AUDIO_CHANNELS; i_U32++)
     {
-      _pAudioEngine_X->pAudioChannelBuffer_U8[i_U32] = nullptr;
+      _pAudioEngine_X->pAudioChannelConfig_X[i_U32].SineFrequency_lf = 440.0 + (i_U32 * 110.0);
+      _pAudioEngine_X->pAudioChannelConfig_X[i_U32].SineAmplitude_lf = 0.3;
+      _pAudioEngine_X->pAudioChannelConfig_X[i_U32].SineEnabled_B = (i_U32 < 2);
+      _pAudioEngine_X->pAudioChannelConfig_X[i_U32].SinePhase_lf = 0.0;
+      _pAudioEngine_X->pAudioChannelConfig_X[i_U32].pAudioChannelBuffer_U8 = (uint8_t *)bmalloc(_pAudioEngine_X->AudioFrameSize);
     }
   }
 }
@@ -229,82 +211,85 @@ static void AudioEngineDestroy(AudioEngine *_pAudioEngine_X)
 {
   uint32_t i_U32;
 
-  if (_pAudioEngine_X->pAudioBuffer_U8)
+  for (i_U32 = 0; i_U32 < PLUGIN_MAX_AUDIO_CHANNELS; i_U32++)
   {
-    bfree(_pAudioEngine_X->pAudioBuffer_U8);
-    _pAudioEngine_X->pAudioBuffer_U8 = nullptr;
-  }
-
-    for (i_U32 = 0; i_U32 < PLUGIN_MAX_AUDIO_CHANNELS; i_U32++)
-  {
-      if (_pAudioEngine_X->pAudioChannelBuffer_U8[i_U32])
+    if (_pAudioEngine_X->pAudioChannelConfig_X[i_U32].pAudioChannelBuffer_U8)
     {
-        bfree(_pAudioEngine_X->pAudioChannelBuffer_U8[i_U32]);
-      _pAudioEngine_X->pAudioChannelBuffer_U8[i_U32] = nullptr;
+      bfree(_pAudioEngine_X->pAudioChannelConfig_X[i_U32].pAudioChannelBuffer_U8);
+      _pAudioEngine_X->pAudioChannelConfig_X[i_U32].pAudioChannelBuffer_U8 = nullptr;
     }
   }
 }
 
 static void AudioEngineGenerateAudio(AudioEngine *_pAudioEngine_X, uint32_t _NbSampleToGenerate_U32)
 {
-  int32_t Sample_S32, *pSample_S32 = (int32_t *)_pAudioEngine_X->pAudioBuffer_U8;
-  uint32_t i_U32, Channel_U32;
+  int32_t *pSample_S32;
   double Amplitude_lf;
 
-  if (_pAudioEngine_X->IsMultichannel_B)
+  if (_pAudioEngine_X->IsAudioSplitMode_B)
   {
-    // Multi-channel mode: generate interleaved 16-channel audio
-    memset(pSample_S32, 0, _NbSampleToGenerate_U32 * PLUGIN_MAX_AUDIO_CHANNELS * sizeof(int32_t));
+    // Split mode: use channel 0 only (mono output)
+    pSample_S32 = (int32_t *)_pAudioEngine_X->pAudioChannelConfig_X[0].pAudioChannelBuffer_U8;
 
-    for (Channel_U32 = 0; Channel_U32 < PLUGIN_MAX_AUDIO_CHANNELS; Channel_U32++)
+    if (_pAudioEngine_X->pAudioChannelConfig_X[0].SineEnabled_B)
     {
-      if (_pAudioEngine_X->pSineEnabled_B[Channel_U32])
-      {
-        Amplitude_lf = _pAudioEngine_X->pSineAmplitude_lf[Channel_U32] * 0x7FFFFFFF;
-
-        for (i_U32 = 0; i_U32 < _NbSampleToGenerate_U32; i_U32++)
-        {
-          Sample_S32 = (int32_t)(Amplitude_lf * sin(_pAudioEngine_X->pSinePhase_lf[Channel_U32]));
-          pSample_S32[i_U32 * 16 + Channel_U32] = Sample_S32;
-
-          _pAudioEngine_X->pSinePhase_lf[Channel_U32] += (2.0 * M_PI * _pAudioEngine_X->pSineFrequency_lf[Channel_U32]) / _pAudioEngine_X->AudioSampleRate_U32;
-          if (_pAudioEngine_X->pSinePhase_lf[Channel_U32] > 2.0 * M_PI)
-          {
-            _pAudioEngine_X->pSinePhase_lf[Channel_U32] -= 2.0 * M_PI;
-          }
-        }
-      }
-    }
-  }
-  else
-  {
-    // Single channel mode
-    if (_pAudioEngine_X->AudioChannelEnabled_B)
-    {
-      Amplitude_lf = _pAudioEngine_X->AudioSinAmplitude_lf * 0x7FFFFFFF;
-      GenerateAudioSinusData(_pAudioEngine_X->AudioSinFrequency_lf, Amplitude_lf, (double)_pAudioEngine_X->AudioSampleRate_U32, _NbSampleToGenerate_U32, pSample_S32,
-                             _pAudioEngine_X->AudioPhase_lf);
+      Amplitude_lf = _pAudioEngine_X->pAudioChannelConfig_X[0].SineAmplitude_lf * 0x7FFFFFFF;
+      GenerateAudioSinusData(_pAudioEngine_X->pAudioChannelConfig_X[0].SineFrequency_lf, Amplitude_lf, (double)_pAudioEngine_X->AudioSampleRate_U32,
+                             _NbSampleToGenerate_U32, pSample_S32, _pAudioEngine_X->pAudioChannelConfig_X[0].SinePhase_lf);
     }
     else
     {
       memset(pSample_S32, 0, _NbSampleToGenerate_U32 * sizeof(int32_t));
     }
   }
+  else
+  {
+    // Multi-channel mode: generate interleaved 16-channel audio
+    // Use channel 0's buffer for interleaved output
+#if 0
+    int32_t Sample_S32;
+    uint32_t i_U32, Channel_U32;
+    
+    pSample_S32 = (int32_t *)_pAudioEngine_X->pAudioChannelConfig_X[0].pAudioChannelBuffer_U8;
+    memset(pSample_S32, 0, _NbSampleToGenerate_U32 * PLUGIN_MAX_AUDIO_CHANNELS * sizeof(int32_t));
+
+    for (Channel_U32 = 0; Channel_U32 < PLUGIN_MAX_AUDIO_CHANNELS; Channel_U32++)
+    {
+      if (_pAudioEngine_X->pAudioChannelConfig_X[Channel_U32].SineEnabled_B)
+      {
+        Amplitude_lf = _pAudioEngine_X->pAudioChannelConfig_X[Channel_U32].SineAmplitude_lf * 0x7FFFFFFF;
+
+        for (i_U32 = 0; i_U32 < _NbSampleToGenerate_U32; i_U32++)
+        {
+          Sample_S32 = (int32_t)(Amplitude_lf * sin(_pAudioEngine_X->pAudioChannelConfig_X[Channel_U32].SinePhase_lf));
+          pSample_S32[i_U32 * PLUGIN_MAX_AUDIO_CHANNELS + Channel_U32] = Sample_S32;
+
+          _pAudioEngine_X->pAudioChannelConfig_X[Channel_U32].SinePhase_lf +=
+              (2.0 * M_PI * _pAudioEngine_X->pAudioChannelConfig_X[Channel_U32].SineFrequency_lf) / _pAudioEngine_X->AudioSampleRate_U32;
+          if (_pAudioEngine_X->pAudioChannelConfig_X[Channel_U32].SinePhase_lf > 2.0 * M_PI)
+          {
+            _pAudioEngine_X->pAudioChannelConfig_X[Channel_U32].SinePhase_lf -= 2.0 * M_PI;
+          }
+        }
+      }
+    }
+#endif
+  }
 }
 
 static void AudioEngineOutputAudio(AudioEngine *_pAudioEngine_X, uint32_t _NbSampleToGenerate_U32)
 {
   struct obs_source_audio AudioFrame_X = {0};
-  AudioFrame_X.data[0] = _pAudioEngine_X->pAudioBuffer_U8;
+  AudioFrame_X.data[0] = _pAudioEngine_X->pAudioChannelConfig_X[0].pAudioChannelBuffer_U8;
   AudioFrame_X.frames = _NbSampleToGenerate_U32;
 
-  if (_pAudioEngine_X->IsMultichannel_B)
+  if (_pAudioEngine_X->IsAudioSplitMode_B)
   {
-    AudioFrame_X.speakers = SPEAKERS_UNKNOWN; // 16-channel layout
+    AudioFrame_X.speakers = SPEAKERS_MONO; // Split mode: mono output
   }
   else
   {
-    AudioFrame_X.speakers = SPEAKERS_MONO;
+    AudioFrame_X.speakers = SPEAKERS_UNKNOWN; // Multi-channel mode: 16-channel layout
   }
 
   AudioFrame_X.samples_per_sec = _pAudioEngine_X->AudioSampleRate_U32;
@@ -323,47 +308,57 @@ static const char *MultiMediaGetName(void *type_data)
 static void *MultiMediaCreate(obs_data_t *_pSetting_X, obs_source_t *_pSource_X)
 {
   MultiMediaSource *pContext_X = (MultiMediaSource *)bzalloc(sizeof(MultiMediaSource));
-  const char *p_c;
-  char pPath_c[512], *pError_c = nullptr;
+  const char *pPath_c;
+  char *pError_c = nullptr;
   obs_log(LOG_INFO, ">>>MultiMediaCreate %p %p", _pSetting_X, _pSource_X);
   pContext_X->pMultiMediaSource_X = _pSource_X;
-
+  // Initialize source selection variables
+  pContext_X->IsAudioSplitMode_B = false; // Default to multi-channel mode
+                                          // Keep in sync with MultiMediaGetDefault
+  pContext_X->VideoSourceType_E = static_cast<int>(obs_data_get_int(_pSetting_X, PROP_VIDEO_SOURCE_TYPE));
+  pContext_X->AudioSourceType_E = static_cast<int>(obs_data_get_int(_pSetting_X, PROP_AUDIO_SOURCE_TYPE));
+  pContext_X->IsVideoIn10bit_B = obs_data_get_bool(_pSetting_X, PROP_USE_10BIT_VIDEO);
+  pContext_X->IsLineInColorBarMoving_B = obs_data_get_bool(_pSetting_X, PROP_COLOR_BAR_MOVING);
+  pContext_X->IsAudioSplitMode_B = obs_data_get_bool(_pSetting_X, PROP_SPLIT_AUDIO_MODE);
+  pContext_X->VideoFrameAccumulator_lf = 0.0;
   // Hardcoded for your specific use case, or pull from _pSetting_X
   if (pContext_X->IsVideoIn10bit_B)
   {
+    pContext_X->VideoFrameRate_lf = 29.97;
     pContext_X->VideoWidth_U32 = 1920;
     pContext_X->VideoHeight_U32 = 1080;
-    pContext_X->VideoFrameSize = EVS::EvsPcieIoApi::CEvsPcieIoApiHelper::ComputeImageSize(EVS::EvsPcieIoApi::VideoStd_1080p_59_94, FOURCC_V210,
-                                                                                          pContext_X->VideoWidth_U32, pContext_X->VideoHeight_U32, false);
+    pContext_X->VideoLineStride_U32 = ((pContext_X->VideoWidth_U32 + 47) / 48) * 128;
+
+    //  EVS::EvsPcieIoApi::CEvsPcieIoApiHelper::ComputeImageSize( EVS::EvsPcieIoApi::VideoStd_1080p_59_94, FOURCC_V210, pContext_X->VideoWidth_U32, 1, false);
+    pContext_X->VideoFrameSize_U32 = pContext_X->VideoLineStride_U32 * pContext_X->VideoHeight_U32;
     //  EVS::EvsPcieIoApi::CEvsPcieIoApiHelper::ComputeImageSize(EVS::EvsPcieIoApi::VideoStd_1080i_59_94, FOURCC_V210, pContext_X->VideoWidth_U32,
     //  pContext_X->VideoHeight_U32, false);
-    pContext_X->pVideoBuffer_U8 = (uint8_t *)bmalloc(pContext_X->VideoFrameSize);
+    pContext_X->pVideoBuffer_U8 = (uint8_t *)bmalloc(pContext_X->VideoFrameSize_U32);
     fill_uyvy_color_bars(pContext_X->pVideoBuffer_U8, pContext_X->VideoWidth_U32, pContext_X->VideoHeight_U32, true);
   }
   else
   {
+    pContext_X->VideoFrameRate_lf = 59.94;
     pContext_X->VideoWidth_U32 = 640;
     pContext_X->VideoHeight_U32 = 480;
-    pContext_X->VideoFrameSize = pContext_X->VideoWidth_U32 * pContext_X->VideoHeight_U32 * 2;
-    pContext_X->pVideoBuffer_U8 = (uint8_t *)bmalloc(pContext_X->VideoFrameSize);
+    pContext_X->VideoLineStride_U32 = pContext_X->VideoWidth_U32 * 2;
+    pContext_X->VideoFrameSize_U32 = pContext_X->VideoLineStride_U32 * pContext_X->VideoHeight_U32;
+    pContext_X->pVideoBuffer_U8 = (uint8_t *)bmalloc(pContext_X->VideoFrameSize_U32);
     fill_uyvy_color_bars(pContext_X->pVideoBuffer_U8, pContext_X->VideoWidth_U32, pContext_X->VideoHeight_U32, false);
   }
+    // Texture VideoWidth_U32 in "integers" (pixels for the GPU texture)
+    // Since 1 integer = 4 bytes, we divide stride by 4.
+    pContext_X->TextureWidth_U32 = pContext_X->VideoLineStride_U32 / 4;
+    // Create texture
+    obs_enter_graphics();
+    // pContext_X->pTexture_X = gs_texture_create(pContext_X->VideoWidth_U32, pContext_X->VideoHeight_U32, GS_BGRA, 1, nullptr, GS_DYNAMIC);
+    pContext_X->pTexture_X = gs_texture_create(pContext_X->TextureWidth_U32, pContext_X->VideoHeight_U32, GS_RGBA, 1, nullptr, GS_DYNAMIC);
+    obs_leave_graphics();
 
-  // Create texture
-  obs_enter_graphics();
-  pContext_X->pTexture_X = gs_texture_create(pContext_X->VideoWidth_U32, pContext_X->VideoHeight_U32, GS_BGRA, 1, nullptr, GS_DYNAMIC);
-  obs_leave_graphics();
+  // Initialize audio engine with same mode as context
+  AudioEngineInit(&pContext_X->AudioEngine_X, _pSource_X, pContext_X->IsAudioSplitMode_B);
 
-  // Initialize audio engine for multi-channel mode
-  AudioEngineInit(&pContext_X->PluginAudioEngine, _pSource_X, true);
-
-  // Initialize source selection variables
-  pContext_X->IsAudioSplitMode_B = false;                        // Default to multi-channel mode
-  pContext_X->VideoSourceType_E = VIDEO_SOURCE_COLOR_BAR;      // Default to Color Bar
-  pContext_X->AudioSourceType_E = AUDIO_SOURCE_SINE_GENERATOR; // Default to Sine Generator
-  pContext_X->IsLineInColorBarMoving_B = true;                         // Default moving bar
-  pContext_X->IsVideoIn10bit_B = true;                          // Default 10-bit
-
+  /*
   p_c = obs_data_get_string(_pSetting_X, "file_path");
   obs_log(LOG_INFO, ">>>MultiMediaCreate obs_data_get_string '%s'", p_c);
 
@@ -375,13 +370,30 @@ static void *MultiMediaCreate(obs_data_t *_pSetting_X, obs_source_t *_pSource_X)
   {
     sprintf(pPath_c, "%s640x480@59.94p_clp_0.yuv8", GL_CliArg_X.BaseDirectory_S.c_str());
   }
-  pContext_X->pVideoFile_X = fopen(pPath_c, "rb");
-  obs_log(LOG_INFO, ">>>MultiMediaCreate video '%s' %p", pPath_c, pContext_X->pVideoFile_X);
-
-  sprintf(pPath_c, "%s16xS24L32@48000_6_0.pcm", GL_CliArg_X.BaseDirectory_S.c_str());
-  pContext_X->pAudioFile_X = fopen(pPath_c, "rb");
-  obs_log(LOG_INFO, ">>>MultiMediaCreate audio '%s' %p", pPath_c, pContext_X->pAudioFile_X);
-
+  */
+  pPath_c = obs_data_get_string(_pSetting_X, PROP_VIDEO_FILE_PATH);
+  if (pPath_c)
+  {
+    pContext_X->pVideoFile_X = fopen(pPath_c, "rb");
+    obs_log(LOG_INFO, ">>>MultiMediaCreate video '%s' %p", pPath_c, pContext_X->pVideoFile_X);
+  }
+  else
+  {
+    pContext_X->pVideoFile_X = nullptr;
+    obs_log(LOG_INFO, ">>>MultiMediaCreate no video file specified");
+  }
+  // sprintf(pPath_c, "%s16xS24L32@48000_6_0.pcm", GL_CliArg_X.BaseDirectory_S.c_str());
+  pPath_c = obs_data_get_string(_pSetting_X, PROP_AUDIO_FILE_PATH);
+  if (pPath_c)
+  {
+    pContext_X->pAudioFile_X = fopen(pPath_c, "rb");
+    obs_log(LOG_INFO, ">>>MultiMediaCreate audio '%s' %p", pPath_c, pContext_X->pAudioFile_X);
+  }
+  else
+  {
+    pContext_X->pAudioFile_X = nullptr;
+    obs_log(LOG_INFO, ">>>MultiMediaCreate no audio file specified");
+  }
   pContext_X->Alpha_f = 255.0f; // 128.0f; // 255.0f; // Default 0xFF
 
   // Compile the Shader
@@ -425,7 +437,7 @@ static void MultiMediaDestroy(void *_pData)
   pContext_X->pVideoBuffer_U8 = nullptr;
 
   // Clean up audio engine
-  AudioEngineDestroy(&pContext_X->PluginAudioEngine);
+  AudioEngineDestroy(&pContext_X->AudioEngine_X);
 
   obs_enter_graphics();
   if (pContext_X->pTexture_X)
@@ -461,15 +473,14 @@ static uint32_t MultiMediaGetHeight(void *_pData)
 static obs_properties_t *MultiMediaGetProperty(void *_pData)
 {
   uint32_t i_U32;
-  char pPropName_c[64],pPropDesc_c[64];
+  char pPropName_c[64], pPropDesc_c[64];
   obs_property_t *pVideoSource_X, *pAudioSource_X;
   // _pData is your MultiMediaSource* pContext_X
   obs_properties_t *pProperty_X = obs_properties_create();
   obs_log(LOG_INFO, ">>>MultiMediaGetProperty %p->%p", _pData, pProperty_X);
 
   // Video Source Selection
-  pVideoSource_X =
-      obs_properties_add_list(pProperty_X, PROP_VIDEO_SOURCE_TYPE, PROP_VIDEO_SOURCE_LABEL, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+  pVideoSource_X = obs_properties_add_list(pProperty_X, PROP_VIDEO_SOURCE_TYPE, PROP_VIDEO_SOURCE_LABEL, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
   obs_property_list_add_int(pVideoSource_X, SOURCE_BOARD_LABEL, 0);
   obs_property_list_add_int(pVideoSource_X, SOURCE_FILE_LABEL, 1);
   obs_property_list_add_int(pVideoSource_X, SOURCE_COLOR_BAR_LABEL, 2);
@@ -480,8 +491,7 @@ static obs_properties_t *MultiMediaGetProperty(void *_pData)
   obs_properties_add_bool(pProperty_X, PROP_COLOR_BAR_MOVING, PROP_COLOR_BAR_MOVING_LABEL);
 
   // Audio Source Selection
-  pAudioSource_X =
-      obs_properties_add_list(pProperty_X, PROP_AUDIO_SOURCE_TYPE, PROP_AUDIO_SOURCE_LABEL, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+  pAudioSource_X = obs_properties_add_list(pProperty_X, PROP_AUDIO_SOURCE_TYPE, PROP_AUDIO_SOURCE_LABEL, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
   obs_property_list_add_int(pAudioSource_X, SOURCE_BOARD_LABEL, 0);
   obs_property_list_add_int(pAudioSource_X, SOURCE_FILE_LABEL, 1);
   obs_property_list_add_int(pAudioSource_X, SOURCE_SINE_GENERATOR_LABEL, 2);
@@ -516,13 +526,17 @@ static void MultiMediaGetDefault(obs_data_t *_pSetting_X)
   obs_log(LOG_INFO, ">>>MultiMediaGetDefault %p", _pSetting_X);
 
   // Video source defaults
-  obs_data_set_default_int(_pSetting_X, PROP_VIDEO_SOURCE_TYPE, 2); // Default to Color Bar
+  obs_data_set_default_int(_pSetting_X, PROP_VIDEO_SOURCE_TYPE, VIDEO_SOURCE_FILE); // VIDEO_SOURCE_COLOR_BAR);
   obs_data_set_default_bool(_pSetting_X, PROP_USE_10BIT_VIDEO, true);
   obs_data_set_default_bool(_pSetting_X, PROP_COLOR_BAR_MOVING, true);
+  obs_data_set_default_bool(_pSetting_X, PROP_USE_10BIT_VIDEO, true);
 
-  // Audio source defaults
-  obs_data_set_default_int(_pSetting_X, PROP_AUDIO_SOURCE_TYPE, 2);     // Default to Sine Generator
-  obs_data_set_default_bool(_pSetting_X, PROP_SPLIT_AUDIO_MODE, false); // Default to multi-channel mode
+  obs_data_set_default_string(_pSetting_X, PROP_VIDEO_FILE_PATH, "C:\\media\\win_io_board\\1920x1080@29.97i_clp_0.yuv10");
+  // Audio source defaults: keep in sync with MultiMediaCreate
+  obs_data_set_default_int(_pSetting_X, PROP_AUDIO_SOURCE_TYPE, AUDIO_SOURCE_FILE); // Default to File
+  obs_data_set_default_bool(_pSetting_X, PROP_SPLIT_AUDIO_MODE, false);             // Default to multi-channel mode
+
+  obs_data_set_default_string(_pSetting_X, PROP_AUDIO_FILE_PATH, "C:\\media\\win_io_board\\16xS24L32@48000_6_0.pcm");
 
   // Set defaults for multi-channel sine waves
   for (i_U32 = 0; i_U32 < PLUGIN_MAX_AUDIO_CHANNELS; i_U32++)
@@ -539,10 +553,11 @@ static void MultiMediaGetDefault(obs_data_t *_pSetting_X)
 }
 static void MultiMediaUpdate(void *_pData, obs_data_t *_pSetting_X)
 {
-  auto *pContext_X = (MultiMediaSource *)_pData;
+  MultiMediaSource *pContext_X = (MultiMediaSource *)_pData;
   uint32_t i_U32;
+  bool NewSplitMode_B;
   char pPropName_c[64];
-  const char *pVideoPath_c, *pAudioPath_c;
+  const char *pPath_c;
 
   obs_log(LOG_INFO, ">>>MultiMediaUpdate %p %p", _pData, _pSetting_X);
 
@@ -551,45 +566,65 @@ static void MultiMediaUpdate(void *_pData, obs_data_t *_pSetting_X)
   pContext_X->AudioSourceType_E = static_cast<int>(obs_data_get_int(_pSetting_X, PROP_AUDIO_SOURCE_TYPE));
   pContext_X->IsVideoIn10bit_B = obs_data_get_bool(_pSetting_X, PROP_USE_10BIT_VIDEO);
   pContext_X->IsLineInColorBarMoving_B = obs_data_get_bool(_pSetting_X, PROP_COLOR_BAR_MOVING);
-  pContext_X->IsAudioSplitMode_B = obs_data_get_bool(_pSetting_X, PROP_SPLIT_AUDIO_MODE);
 
-  // Update multi-channel sine wave settings
+  NewSplitMode_B = obs_data_get_bool(_pSetting_X, PROP_SPLIT_AUDIO_MODE);
+
+  // If split mode changed, reinitialize audio engine with correct configuration
+  if (NewSplitMode_B != pContext_X->IsAudioSplitMode_B)
+  {
+    pContext_X->IsAudioSplitMode_B = NewSplitMode_B;
+
+    // Clean up old audio engine
+    AudioEngineDestroy(&pContext_X->AudioEngine_X);
+
+    // Reinitialize with new mode
+    AudioEngineInit(&pContext_X->AudioEngine_X, pContext_X->pMultiMediaSource_X, pContext_X->IsAudioSplitMode_B);
+  }
+  // Restore user settings after reinitialization
   for (i_U32 = 0; i_U32 < PLUGIN_MAX_AUDIO_CHANNELS; i_U32++)
   {
     sprintf(pPropName_c, PROP_SINE_ENABLED_FMT, i_U32 + 1);
-    pContext_X->PluginAudioEngine.pSineEnabled_B[i_U32] = obs_data_get_bool(_pSetting_X, pPropName_c);
+    pContext_X->AudioEngine_X.pAudioChannelConfig_X[i_U32].SineEnabled_B = obs_data_get_bool(_pSetting_X, pPropName_c);
 
     sprintf(pPropName_c, PROP_SINE_FREQUENCY_FMT, i_U32 + 1);
-    pContext_X->PluginAudioEngine.pSineFrequency_lf[i_U32] = obs_data_get_double(_pSetting_X, pPropName_c);
+    pContext_X->AudioEngine_X.pAudioChannelConfig_X[i_U32].SineFrequency_lf = obs_data_get_double(_pSetting_X, pPropName_c);
 
     sprintf(pPropName_c, PROP_SINE_AMPLITUDE_FMT, i_U32 + 1);
-    pContext_X->PluginAudioEngine.pSineAmplitude_lf[i_U32] = obs_data_get_double(_pSetting_X, pPropName_c);
+    pContext_X->AudioEngine_X.pAudioChannelConfig_X[i_U32].SineAmplitude_lf = obs_data_get_double(_pSetting_X, pPropName_c);
   }
 
   // 1. Handle Video File Update
-  pVideoPath_c = obs_data_get_string(_pSetting_X, PROP_VIDEO_FILE_PATH);
-  if (pVideoPath_c && *pVideoPath_c)
+  pPath_c = obs_data_get_string(_pSetting_X, PROP_VIDEO_FILE_PATH);
+  if (pPath_c)
   {
     if (pContext_X->pVideoFile_X)
     {
       fclose(pContext_X->pVideoFile_X);
       pContext_X->pVideoFile_X = nullptr;
     }
-    pContext_X->pVideoFile_X = fopen(pVideoPath_c, "rb");
-    obs_log(LOG_INFO, "Video pSource_X updated to: %s", pVideoPath_c);
+    pContext_X->pVideoFile_X = fopen(pPath_c, "rb");
+    obs_log(LOG_INFO, "Video pSource_X updated to: %s", pPath_c);
+  }
+  else
+  {
+    obs_log(LOG_INFO, "No video file specified, keeping existing source");
   }
 
   // 2. Handle Audio File Update
-  pAudioPath_c = obs_data_get_string(_pSetting_X, PROP_AUDIO_FILE_PATH);
-  if (pAudioPath_c && *pAudioPath_c)
+  pPath_c = obs_data_get_string(_pSetting_X, PROP_AUDIO_FILE_PATH);
+  if (pPath_c)
   {
     if (pContext_X->pAudioFile_X)
     {
       fclose(pContext_X->pAudioFile_X);
       pContext_X->pAudioFile_X = nullptr;
     }
-    pContext_X->pAudioFile_X = fopen(pAudioPath_c, "rb");
-    obs_log(LOG_INFO, "Audio pSource_X updated to: %s", pAudioPath_c);
+    pContext_X->pAudioFile_X = fopen(pPath_c, "rb");
+    obs_log(LOG_INFO, "Audio pSource_X updated to: %s", pPath_c);
+  }
+  else
+  {
+    obs_log(LOG_INFO, "No audio file specified, keeping existing source");
   }
 }
 static void MultiMediaVideoTick(void *_pData, float seconds)
@@ -605,47 +640,50 @@ static void MultiMediaVideoTick(void *_pData, float seconds)
   if (pContext_X->pMultiMediaSource_X)
   {
     // 1. Add current frame time to our accumulator
-    pContext_X->PluginAudioEngine.AudioRemainderSecond_lf += (double)seconds;
-
-    // 2. Calculate exactly how many whole samples fit into our accumulated time
-    NbAudioSampleToGenerate_U32 = (uint32_t)(pContext_X->PluginAudioEngine.AudioSampleRate_U32 * pContext_X->PluginAudioEngine.AudioRemainderSecond_lf);
+    pContext_X->AudioEngine_X.AudioRemainderSecond_lf += (double)seconds;
+    pContext_X->VideoFrameAccumulator_lf += (double)seconds; // ← ADD THIS LINE
+    // 2. Calculate exactly how many whole samples fit into our accumulated
+    NbAudioSampleToGenerate_U32 = (uint32_t)(pContext_X->AudioEngine_X.AudioSampleRate_U32 * pContext_X->AudioEngine_X.AudioRemainderSecond_lf);
 
     // 3. Subtract the time we are actually using from the accumulator
     // This preserves the fractional "leftover" time for the next tick
-    pContext_X->PluginAudioEngine.AudioRemainderSecond_lf -= (double)NbAudioSampleToGenerate_U32 / pContext_X->PluginAudioEngine.AudioSampleRate_U32;
-    int32_t *pSample_S32 = (int32_t *)pContext_X->PluginAudioEngine.pAudioBuffer_U8;
+    pContext_X->AudioEngine_X.AudioRemainderSecond_lf -= (double)NbAudioSampleToGenerate_U32 / pContext_X->AudioEngine_X.AudioSampleRate_U32;
 
-    if (pContext_X->AudioSourceType_E == AUDIO_SOURCE_BOARD && NbAudioSampleToGenerate_U32 > 0) // Board
+    int32_t *pSample_S32 = (int32_t *)pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].pAudioChannelBuffer_U8;
+
+    if (pContext_X->AudioSourceType_E == AUDIO_SOURCE_BOARD) // Board
     {
       // TODO: Implement board audio capture
       // For now, output silence
-      memset(pSample_S32, 0, NbAudioSampleToGenerate_U32 * pContext_X->PluginAudioEngine.NbAudioChannel_U32 * sizeof(int32_t));
+      memset(pSample_S32, 0, NbAudioSampleToGenerate_U32 * pContext_X->AudioEngine_X.NbAudioChannel_U32 * sizeof(int32_t));
     }
-    else if (pContext_X->AudioSourceType_E == AUDIO_SOURCE_SINE_GENERATOR && NbAudioSampleToGenerate_U32 > 0) // Sine Generator
+    else if (pContext_X->AudioSourceType_E == AUDIO_SOURCE_SINE_GENERATOR) // Sine Generator
     {
       if (pContext_X->IsAudioSplitMode_B)
       {
         // Option 2: Individual channels are handled by separate sources
-        // This main source only generates a simple test tone
-        GenerateAudioSinusData(440.0, 0.3 * 0x7FFFFFFF, (double)pContext_X->PluginAudioEngine.AudioSampleRate_U32, NbAudioSampleToGenerate_U32, pSample_S32,
-                               pContext_X->PluginAudioEngine.AudioPhase_lf);
+        // This main source only generates a simple test tone using channel 0 configuration
+        GenerateAudioSinusData(pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SineFrequency_lf,
+                               pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SineAmplitude_lf * 0x7FFFFFFF,
+                               (double)pContext_X->AudioEngine_X.AudioSampleRate_U32, NbAudioSampleToGenerate_U32, pSample_S32,
+                               pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SinePhase_lf);
 
         // Output single test audio
         struct obs_source_audio AudioFrame_X = {0};
-        AudioFrame_X.data[0] = pContext_X->PluginAudioEngine.pAudioBuffer_U8;
+        AudioFrame_X.data[0] = pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].pAudioChannelBuffer_U8;
         AudioFrame_X.frames = NbAudioSampleToGenerate_U32;
         AudioFrame_X.speakers = SPEAKERS_MONO;
-        AudioFrame_X.samples_per_sec = pContext_X->PluginAudioEngine.AudioSampleRate_U32;
+        AudioFrame_X.samples_per_sec = pContext_X->AudioEngine_X.AudioSampleRate_U32;
         AudioFrame_X.format = AUDIO_FORMAT_32BIT;
         AudioFrame_X.timestamp =
-            obs_get_video_frame_time() - util_mul_div64(NbAudioSampleToGenerate_U32, 1000000000ULL, pContext_X->PluginAudioEngine.AudioSampleRate_U32);
+            obs_get_video_frame_time() - util_mul_div64(NbAudioSampleToGenerate_U32, 1000000000ULL, pContext_X->AudioEngine_X.AudioSampleRate_U32);
         obs_source_output_audio(pContext_X->pMultiMediaSource_X, &AudioFrame_X);
       }
       else
       {
         // Option 3: Generate proper 16-channel interleaved audio using AudioEngine
-        AudioEngineGenerateAudio(&pContext_X->PluginAudioEngine, NbAudioSampleToGenerate_U32);
-        AudioEngineOutputAudio(&pContext_X->PluginAudioEngine, NbAudioSampleToGenerate_U32);
+        AudioEngineGenerateAudio(&pContext_X->AudioEngine_X, NbAudioSampleToGenerate_U32);
+        AudioEngineOutputAudio(&pContext_X->AudioEngine_X, NbAudioSampleToGenerate_U32);
       }
     }
     else if (pContext_X->AudioSourceType_E == AUDIO_SOURCE_FILE) // File
@@ -664,30 +702,32 @@ static void MultiMediaVideoTick(void *_pData, float seconds)
         }
 
         // Output file-based audio
-        AudioFrame_X.data[0] = pContext_X->PluginAudioEngine.pAudioBuffer_U8;
+        AudioFrame_X.data[0] = pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].pAudioChannelBuffer_U8;
         AudioFrame_X.frames = NbAudioSampleToGenerate_U32;
         AudioFrame_X.speakers = SPEAKERS_MONO;
-        AudioFrame_X.samples_per_sec = pContext_X->PluginAudioEngine.AudioSampleRate_U32;
+        AudioFrame_X.samples_per_sec = pContext_X->AudioEngine_X.AudioSampleRate_U32;
         AudioFrame_X.format = AUDIO_FORMAT_32BIT;
         AudioFrame_X.timestamp =
-            obs_get_video_frame_time() - util_mul_div64(NbAudioSampleToGenerate_U32, 1000000000ULL, pContext_X->PluginAudioEngine.AudioSampleRate_U32);
+            obs_get_video_frame_time() - util_mul_div64(NbAudioSampleToGenerate_U32, 1000000000ULL, pContext_X->AudioEngine_X.AudioSampleRate_U32);
         obs_source_output_audio(pContext_X->pMultiMediaSource_X, &AudioFrame_X);
-      }
-      else
-      {
-        // Fallback: If no file, output silence so the mixer doesn't "freeze"
-        memset(pSample_S32, 0, NbAudioSampleToGenerate_U32 * sizeof(int32_t));
       }
     }
     pContext_X->TickOut = std::chrono::high_resolution_clock::now();
     pContext_X->TickElapsedTimeInUs = std::chrono::duration_cast<std::chrono::microseconds>(pContext_X->TickOut - pContext_X->TickIn).count();
-    obs_log(LOG_INFO, ">>>MultiMediaVideoTick Delta %lld Elapsed %lld uS", pContext_X->DeltaTickInUs, pContext_X->TickElapsedTimeInUs);
+    // Only log occasionally to avoid spam
+    static uint32_t log_counter = 0;
+    if (++log_counter % 60 == 0) // Log every 60 frames (~1 second at 60fps)
+    {
+      obs_log(LOG_INFO, ">>>MultiMediaVideoTick Delta %lld Elapsed %lld uS, Samples %u, Remainder %.6f", pContext_X->DeltaTickInUs,
+              pContext_X->TickElapsedTimeInUs, NbAudioSampleToGenerate_U32, pContext_X->AudioEngine_X.AudioRemainderSecond_lf);
+    }
   }
 }
 // This is where we draw
 static void MultiMediaVideoRender(void *_pData, gs_effect_t *_pEffect)
 {
   MultiMediaSource *pContext_X = (MultiMediaSource *)_pData;
+  double FrameDuration_lf; 
   auto Now = std::chrono::high_resolution_clock::now();
   pContext_X->DeltaRendererInUs = std::chrono::duration_cast<std::chrono::microseconds>(Now - pContext_X->RendererIn).count();
   pContext_X->RendererIn = std::chrono::high_resolution_clock::now();
@@ -695,88 +735,91 @@ static void MultiMediaVideoRender(void *_pData, gs_effect_t *_pEffect)
   {
     return;
   }
+  FrameDuration_lf = 1.0 / pContext_X->VideoFrameRate_lf;
 
-  // 1. Calculate MultiMedia Stride
-  // Standard MultiMedia stride is usually 128-byte aligned (48 pixels)
-  // Formula: (Width + 47) / 48 * 128
-  uint32_t stride_bytes = ((pContext_X->VideoWidth_U32 + 47) / 48) * 128;
-
-  // Texture VideoWidth_U32 in "integers" (pixels for the GPU texture)
-  // Since 1 integer = 4 bytes, we divide stride by 4.
-  uint32_t tex_width = stride_bytes / 4;
-
-  // 2. Manage Texture
-  if (!pContext_X->pTexture_X || gs_texture_get_width(pContext_X->pTexture_X) != tex_width ||
-      gs_texture_get_height(pContext_X->pTexture_X) != pContext_X->VideoHeight_U32)
+  // Only read a new frame when enough time has elapsed
+  if (pContext_X->VideoFrameAccumulator_lf >= FrameDuration_lf)
   {
+    pContext_X->VideoFrameAccumulator_lf -= FrameDuration_lf;
+
+    // 2. Manage Texture
+    if (!pContext_X->pTexture_X || gs_texture_get_width(pContext_X->pTexture_X) != pContext_X->TextureWidth_U32 ||
+        gs_texture_get_height(pContext_X->pTexture_X) != pContext_X->VideoHeight_U32)
+    {
+      if (pContext_X->pTexture_X)
+      {
+        gs_texture_destroy(pContext_X->pTexture_X);
+        pContext_X->pTexture_X = nullptr;
+      }
+
+      // Use GS_RGBA to store 32-bit words
+      pContext_X->pTexture_X = gs_texture_create(pContext_X->TextureWidth_U32, pContext_X->VideoHeight_U32, GS_RGBA, 1, nullptr, GS_DYNAMIC);
+    }
+
+    // 3. Upload Data
     if (pContext_X->pTexture_X)
     {
-      gs_texture_destroy(pContext_X->pTexture_X);
-      pContext_X->pTexture_X = nullptr;
-    }
-
-    // Use GS_RGBA to store 32-bit words
-    pContext_X->pTexture_X = gs_texture_create(tex_width, pContext_X->VideoHeight_U32, GS_RGBA, 1, nullptr, GS_DYNAMIC);
-  }
-
-  // 3. Upload Data
-  if (pContext_X->pTexture_X)
-  {
-    if (pContext_X->VideoSourceType_E == VIDEO_SOURCE_BOARD) // Board
-    {
-      // TODO: Implement board video capture
-      return;
-    }
-    else if (pContext_X->VideoSourceType_E == VIDEO_SOURCE_FILE) // File
-    {
-      if (!pContext_X->pVideoFile_X)
+      if (pContext_X->VideoSourceType_E == VIDEO_SOURCE_BOARD) // Board
       {
+        // TODO: Implement board video capture
         return;
       }
-      // Read one frame
-      size_t read = fread(pContext_X->pVideoBuffer_U8, 1, pContext_X->VideoFrameSize, pContext_X->pVideoFile_X);
-      // Loop file if EOF
-      if (read < pContext_X->VideoFrameSize)
+      else if (pContext_X->VideoSourceType_E == VIDEO_SOURCE_FILE) // File
       {
-        fseek(pContext_X->pVideoFile_X, 0, SEEK_SET);
-        // obs_log(LOG_INFO, ">>>raw_video_tick %p sz %d not enought", pContext_X->video_file, read);
-        return;
-      }
-    }
-    else if (pContext_X->VideoSourceType_E == VIDEO_SOURCE_COLOR_BAR) // Color Bar
-    {
-      fill_uyvy_color_bars(pContext_X->pVideoBuffer_U8, pContext_X->VideoWidth_U32, pContext_X->VideoHeight_U32, pContext_X->IsVideoIn10bit_B);
-
-      if (pContext_X->IsLineInColorBarMoving_B)
-      {
-        draw_line_avx2(pContext_X->pVideoBuffer_U8, pContext_X->VideoWidth_U32, pContext_X->VideoHeight_U32, 255, 0, 0, pContext_X->MovingLinePos_U32, 2, true,
-                       pContext_X->IsVideoIn10bit_B);
-        pContext_X->MovingLinePos_U32 += 2;
-        if (pContext_X->MovingLinePos_U32 > pContext_X->VideoHeight_U32)
+        if (!pContext_X->pVideoFile_X)
         {
-          pContext_X->MovingLinePos_U32 = 0;
+          return;
+        }
+        // Read one frame
+        size_t read = fread(pContext_X->pVideoBuffer_U8, 1, pContext_X->VideoFrameSize_U32, pContext_X->pVideoFile_X);
+        // Loop file if EOF
+        if (read < pContext_X->VideoFrameSize_U32)
+        {
+          fseek(pContext_X->pVideoFile_X, 0, SEEK_SET);
+          // obs_log(LOG_INFO, ">>>raw_video_tick %p sz %d not enought", pContext_X->video_file, read);
+          return;
         }
       }
+      else if (pContext_X->VideoSourceType_E == VIDEO_SOURCE_COLOR_BAR) // Color Bar
+      {
+        fill_uyvy_color_bars(pContext_X->pVideoBuffer_U8, pContext_X->VideoWidth_U32, pContext_X->VideoHeight_U32, pContext_X->IsVideoIn10bit_B);
+
+        if (pContext_X->IsLineInColorBarMoving_B)
+        {
+          draw_line_avx2(pContext_X->pVideoBuffer_U8, pContext_X->VideoWidth_U32, pContext_X->VideoHeight_U32, 255, 0, 0, pContext_X->MovingLinePos_U32, 2,
+                         true, pContext_X->IsVideoIn10bit_B);
+          pContext_X->MovingLinePos_U32 += 2;
+          if (pContext_X->MovingLinePos_U32 > pContext_X->VideoHeight_U32)
+          {
+            pContext_X->MovingLinePos_U32 = 0;
+          }
+        }
+      }
+      gs_texture_set_image(pContext_X->pTexture_X, pContext_X->pVideoBuffer_U8, pContext_X->VideoLineStride_U32, false);
     }
-    gs_texture_set_image(pContext_X->pTexture_X, pContext_X->pVideoBuffer_U8, stride_bytes, false);
+
+    // 4. Draw with Custom Shader
+    // We override the default 'effect' passed in by OBS with our custom one
+    gs_effect_t *cur_effect = pContext_X->pEffect_X;
+
+    gs_effect_set_texture(pContext_X->pShaderParamImage_X, pContext_X->pTexture_X);
+    gs_effect_set_float(pContext_X->pShaderParamWidth_X, (float)pContext_X->VideoWidth_U32);
+    gs_effect_set_float(pContext_X->pShaderParamAlpha_X, pContext_X->Alpha_f); // 255.0
+
+    while (gs_effect_loop(cur_effect, "Draw"))
+    {
+      // Draw sprite to fill the canvas output, not the texture size
+      gs_draw_sprite(pContext_X->pTexture_X, 0, pContext_X->VideoWidth_U32, pContext_X->VideoHeight_U32);
+    }
+    pContext_X->RendererOut = std::chrono::high_resolution_clock::now();
+    pContext_X->RendererElapsedTimeInUs = std::chrono::duration_cast<std::chrono::microseconds>(pContext_X->RendererOut - pContext_X->TickIn).count();
+    // Only log occasionally to avoid spam
+    static uint32_t render_log_counter = 0;
+    if (++render_log_counter % 60 == 0) // Log every 60 frames
+    {
+      obs_log(LOG_INFO, ">>>MultiMediaVideoRender Delta %lld Elapsed %lld uS", pContext_X->DeltaRendererInUs, pContext_X->RendererElapsedTimeInUs);
+    }
   }
-
-  // 4. Draw with Custom Shader
-  // We override the default 'effect' passed in by OBS with our custom one
-  gs_effect_t *cur_effect = pContext_X->pEffect_X;
-
-  gs_effect_set_texture(pContext_X->pShaderParamImage_X, pContext_X->pTexture_X);
-  gs_effect_set_float(pContext_X->pShaderParamWidth_X, (float)pContext_X->VideoWidth_U32);
-  gs_effect_set_float(pContext_X->pShaderParamAlpha_X, pContext_X->Alpha_f); // 255.0
-
-  while (gs_effect_loop(cur_effect, "Draw"))
-  {
-    // Draw sprite to fill the canvas output, not the texture size
-    gs_draw_sprite(pContext_X->pTexture_X, 0, pContext_X->VideoWidth_U32, pContext_X->VideoHeight_U32);
-  }
-  pContext_X->RendererOut = std::chrono::high_resolution_clock::now();
-  pContext_X->RendererElapsedTimeInUs = std::chrono::duration_cast<std::chrono::microseconds>(pContext_X->RendererOut - pContext_X->TickIn).count();
-  obs_log(LOG_INFO, ">>>MultiMediaVideoRender Delta %lld Elapsed %lld uS", pContext_X->DeltaRendererInUs, pContext_X->RendererElapsedTimeInUs);
 }
 
 /*
@@ -823,9 +866,9 @@ static void *AudioChannel_create(obs_data_t *_pSetting_X, obs_source_t *pSource_
 {
   AudioChannelSource *pContext_X = (AudioChannelSource *)bzalloc(sizeof(AudioChannelSource));
 
-  // Initialize audio engine for single channel mode
-  AudioEngineInit(&pContext_X->PluginAudioEngine, pSource_X, false);
-  pContext_X->channel_number = 1; // Will be set during registration
+  // Initialize audio engine for split audio mode (mono output)
+  AudioEngineInit(&pContext_X->AudioEngine_X, pSource_X, true);
+  pContext_X->AudioChannelNumber_U32 = 1; // Will be set during registration
 
   return pContext_X;
 }
@@ -835,7 +878,7 @@ static void AudioChannel_destroy(void *_pData)
   AudioChannelSource *pContext_X = (AudioChannelSource *)_pData;
 
   // Clean up audio engine
-  AudioEngineDestroy(&pContext_X->PluginAudioEngine);
+  AudioEngineDestroy(&pContext_X->AudioEngine_X);
 
   bfree(pContext_X);
   pContext_X = nullptr;
@@ -863,17 +906,17 @@ static void AudioChannel_update(void *_pData, obs_data_t *_pSetting_X)
 {
   AudioChannelSource *pContext_X = (AudioChannelSource *)_pData;
 
-  pContext_X->PluginAudioEngine.AudioChannelEnabled_B = obs_data_get_bool(_pSetting_X, PROP_ENABLED);
-  pContext_X->PluginAudioEngine.AudioSinFrequency_lf = obs_data_get_double(_pSetting_X, PROP_FREQUENCY);
-  pContext_X->PluginAudioEngine.AudioSinAmplitude_lf = obs_data_get_double(_pSetting_X, PROP_AMPLITUDE);
+  pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SineEnabled_B = obs_data_get_bool(_pSetting_X, PROP_ENABLED);
+  pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SineFrequency_lf = obs_data_get_double(_pSetting_X, PROP_FREQUENCY);
+  pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SineAmplitude_lf = obs_data_get_double(_pSetting_X, PROP_AMPLITUDE);
 }
 
 static void AudioChannel_tick(void *_pData, float seconds)
 {
   AudioChannelSource *pContext_X = (AudioChannelSource *)_pData;
-  AudioEngine *engine = &pContext_X->PluginAudioEngine;
+  AudioEngine *engine = &pContext_X->AudioEngine_X;
 
-  if (!engine->pAudioSource_X || !engine->AudioChannelEnabled_B)
+  if (!engine->pAudioSource_X || !engine->pAudioChannelConfig_X[0].SineEnabled_B)
   {
     return;
   }
@@ -1059,10 +1102,10 @@ static void AudioChannelGetDefault_15(obs_data_t *_pSetting_X)
 }
 
 // Array of function pointers
-static const char *(*sine_get_name_functions[])(void *) = {
-    AudioChannelGetName_0,  AudioChannelGetName_1,  AudioChannelGetName_2,  AudioChannelGetName_3, AudioChannelGetName_4,  AudioChannelGetName_5,
-    AudioChannelGetName_6,  AudioChannelGetName_7,  AudioChannelGetName_8,  AudioChannelGetName_9, AudioChannelGetName_10, AudioChannelGetName_11,
-    AudioChannelGetName_12, AudioChannelGetName_13, AudioChannelGetName_14, AudioChannelGetName_15};
+static const char *(*sine_get_name_functions[])(void *) = {AudioChannelGetName_0,  AudioChannelGetName_1,  AudioChannelGetName_2,  AudioChannelGetName_3,
+                                                           AudioChannelGetName_4,  AudioChannelGetName_5,  AudioChannelGetName_6,  AudioChannelGetName_7,
+                                                           AudioChannelGetName_8,  AudioChannelGetName_9,  AudioChannelGetName_10, AudioChannelGetName_11,
+                                                           AudioChannelGetName_12, AudioChannelGetName_13, AudioChannelGetName_14, AudioChannelGetName_15};
 
 static void (*sine_get_defaults_functions[])(obs_data_t *) = {
     AudioChannelGetDefault_0,  AudioChannelGetDefault_1,  AudioChannelGetDefault_2,  AudioChannelGetDefault_3,
@@ -1099,7 +1142,7 @@ bool obs_module_load(void)
 {
   bool Rts_B = false;
   WSADATA wsa;
-  uint32_t i_U32;
+  // uint32_t i_U32;
 
   obs_log(LOG_INFO, "Plugin loaded successfully (version %s)", PLUGIN_VERSION);
 
@@ -1148,6 +1191,7 @@ gs_stage_texture(): Used to move the frame data from the GPU to the CPU if you n
   obs_register_source(&MultiMedia_source_info);
 
   // Always register 16 separate sine channel sources for Option 2
+#if 0
   obs_log(LOG_INFO, "Registering 16 individual sine channel sources");
   InitializeAudioChannelSource();
   for (i_U32 = 0; i_U32 < PLUGIN_MAX_AUDIO_CHANNELS; i_U32++)
@@ -1156,7 +1200,7 @@ gs_stage_texture(): Used to move the frame data from the GPU to the CPU if you n
     obs_log(LOG_INFO, "Registered sine channel %d", i_U32 + 1);
   }
   obs_log(LOG_INFO, "Both audio modes available - use 'Split Audio Mode' property to switch");
-
+#endif
   // obs_register_source(&udp_stream_filter_info);
   // obs_register_output(&raw_dump_info);
   //  Add a button to the Tools menu

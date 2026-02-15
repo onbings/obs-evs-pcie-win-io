@@ -110,6 +110,8 @@ struct MultiMediaSource
 {
   obs_source_t *pMultiMediaSource_X; // Obs source pointer
   FILE *pVideoFile_X;                // Video file handle
+  uint64_t VideoFileSize_U64;
+  uint64_t VideoFilePos_U64;
   // Graphics resources
   gs_effect_t *pEffect_X;   // Shader effect
   gs_texture_t *pTexture_X; // Texture for video frame
@@ -304,11 +306,93 @@ static const char *MultiMediaGetName(void *type_data)
   obs_log(LOG_INFO, ">>>MultiMediaGetName %p->%s", type_data, PLUGIN_INPUT_NAME);
   return PLUGIN_INPUT_NAME;
 }
+static void MultiMediaUpdate(void *_pData, obs_data_t *_pSetting_X)
+{
+  MultiMediaSource *pContext_X = (MultiMediaSource *)_pData;
+  uint32_t i_U32;
+  bool NewSplitMode_B;
+  char pPropName_c[64];
+  const char *pPath_c;
 
+  obs_log(LOG_INFO, ">>>MultiMediaUpdate %p %p", _pData, _pSetting_X);
+
+  // Update pSource_X selection settings
+  pContext_X->VideoSourceType_E = static_cast<int>(obs_data_get_int(_pSetting_X, PROP_VIDEO_SOURCE_TYPE));
+  pContext_X->AudioSourceType_E = static_cast<int>(obs_data_get_int(_pSetting_X, PROP_AUDIO_SOURCE_TYPE));
+  pContext_X->IsVideoIn10bit_B = obs_data_get_bool(_pSetting_X, PROP_USE_10BIT_VIDEO);
+  pContext_X->IsLineInColorBarMoving_B = obs_data_get_bool(_pSetting_X, PROP_COLOR_BAR_MOVING);
+
+  NewSplitMode_B = obs_data_get_bool(_pSetting_X, PROP_SPLIT_AUDIO_MODE);
+
+  // If split mode changed, reinitialize audio engine with correct configuration
+  if (NewSplitMode_B != pContext_X->IsAudioSplitMode_B)
+  {
+    pContext_X->IsAudioSplitMode_B = NewSplitMode_B;
+
+    // Clean up old audio engine
+    AudioEngineDestroy(&pContext_X->AudioEngine_X);
+
+    // Reinitialize with new mode
+    AudioEngineInit(&pContext_X->AudioEngine_X, pContext_X->pMultiMediaSource_X, pContext_X->IsAudioSplitMode_B);
+  }
+  // Restore user settings after reinitialization
+  for (i_U32 = 0; i_U32 < PLUGIN_MAX_AUDIO_CHANNELS; i_U32++)
+  {
+    sprintf(pPropName_c, PROP_SINE_ENABLED_FMT, i_U32 + 1);
+    pContext_X->AudioEngine_X.pAudioChannelConfig_X[i_U32].SineEnabled_B = obs_data_get_bool(_pSetting_X, pPropName_c);
+
+    sprintf(pPropName_c, PROP_SINE_FREQUENCY_FMT, i_U32 + 1);
+    pContext_X->AudioEngine_X.pAudioChannelConfig_X[i_U32].SineFrequency_lf = obs_data_get_double(_pSetting_X, pPropName_c);
+
+    sprintf(pPropName_c, PROP_SINE_AMPLITUDE_FMT, i_U32 + 1);
+    pContext_X->AudioEngine_X.pAudioChannelConfig_X[i_U32].SineAmplitude_lf = obs_data_get_double(_pSetting_X, pPropName_c);
+  }
+
+  // 1. Handle Video File Update
+  pPath_c = obs_data_get_string(_pSetting_X, PROP_VIDEO_FILE_PATH);
+  if (pPath_c)
+  {
+    if (pContext_X->pVideoFile_X)
+    {
+      fclose(pContext_X->pVideoFile_X);
+      pContext_X->pVideoFile_X = nullptr;
+    }
+    pContext_X->pVideoFile_X = fopen(pPath_c, "rb");
+    pContext_X->VideoFilePos_U64 = 0;
+    pContext_X->VideoFileSize_U64 = 0;
+    obs_log(LOG_INFO, "Video pSource_X updated to: %s", pPath_c);
+    if (pContext_X->pVideoFile_X)
+    {
+      fseek(pContext_X->pVideoFile_X, 0, SEEK_END);
+      pContext_X->VideoFileSize_U64 = ftell(pContext_X->pVideoFile_X);
+      fseek(pContext_X->pVideoFile_X, 0, SEEK_SET);
+    }
+  }
+  else
+  {
+    obs_log(LOG_INFO, "No video file specified, keeping existing source");
+  }
+
+  // 2. Handle Audio File Update
+  pPath_c = obs_data_get_string(_pSetting_X, PROP_AUDIO_FILE_PATH);
+  if (pPath_c)
+  {
+    if (pContext_X->pAudioFile_X)
+    {
+      fclose(pContext_X->pAudioFile_X);
+      pContext_X->pAudioFile_X = nullptr;
+    }
+    pContext_X->pAudioFile_X = fopen(pPath_c, "rb");
+    obs_log(LOG_INFO, "Audio pSource_X updated to: %s", pPath_c);
+  }
+  else
+  {
+    obs_log(LOG_INFO, "No audio file specified, keeping existing source");
+  }
+}
 static void *MultiMediaCreate(obs_data_t *_pSetting_X, obs_source_t *_pSource_X)
 {
   MultiMediaSource *pContext_X = (MultiMediaSource *)bzalloc(sizeof(MultiMediaSource));
-  const char *pPath_c;
   char *pError_c = nullptr;
   obs_log(LOG_INFO, ">>>MultiMediaCreate %p %p", _pSetting_X, _pSource_X);
   pContext_X->pMultiMediaSource_X = _pSource_X;
@@ -371,6 +455,7 @@ static void *MultiMediaCreate(obs_data_t *_pSetting_X, obs_source_t *_pSource_X)
     sprintf(pPath_c, "%s640x480@59.94p_clp_0.yuv8", GL_CliArg_X.BaseDirectory_S.c_str());
   }
   */
+  /*
   pPath_c = obs_data_get_string(_pSetting_X, PROP_VIDEO_FILE_PATH);
   if (pPath_c)
   {
@@ -394,6 +479,7 @@ static void *MultiMediaCreate(obs_data_t *_pSetting_X, obs_source_t *_pSource_X)
     pContext_X->pAudioFile_X = nullptr;
     obs_log(LOG_INFO, ">>>MultiMediaCreate no audio file specified");
   }
+  */
   pContext_X->Alpha_f = 255.0f; // 128.0f; // 255.0f; // Default 0xFF
 
   // Compile the Shader
@@ -414,6 +500,8 @@ static void *MultiMediaCreate(obs_data_t *_pSetting_X, obs_source_t *_pSource_X)
     pContext_X->pShaderParamAlpha_X = gs_effect_get_param_by_name(pContext_X->pEffect_X, "alpha_val");
   }
   obs_leave_graphics();
+  MultiMediaUpdate(pContext_X, _pSetting_X);
+
   obs_log(LOG_INFO, ">>>MultiMediaCreate ->%p", pContext_X);
   return pContext_X;
 }
@@ -551,103 +639,30 @@ static void MultiMediaGetDefault(obs_data_t *_pSetting_X)
     obs_data_set_default_double(_pSetting_X, pPropName_c, 0.3);
   }
 }
-static void MultiMediaUpdate(void *_pData, obs_data_t *_pSetting_X)
-{
-  MultiMediaSource *pContext_X = (MultiMediaSource *)_pData;
-  uint32_t i_U32;
-  bool NewSplitMode_B;
-  char pPropName_c[64];
-  const char *pPath_c;
 
-  obs_log(LOG_INFO, ">>>MultiMediaUpdate %p %p", _pData, _pSetting_X);
-
-  // Update pSource_X selection settings
-  pContext_X->VideoSourceType_E = static_cast<int>(obs_data_get_int(_pSetting_X, PROP_VIDEO_SOURCE_TYPE));
-  pContext_X->AudioSourceType_E = static_cast<int>(obs_data_get_int(_pSetting_X, PROP_AUDIO_SOURCE_TYPE));
-  pContext_X->IsVideoIn10bit_B = obs_data_get_bool(_pSetting_X, PROP_USE_10BIT_VIDEO);
-  pContext_X->IsLineInColorBarMoving_B = obs_data_get_bool(_pSetting_X, PROP_COLOR_BAR_MOVING);
-
-  NewSplitMode_B = obs_data_get_bool(_pSetting_X, PROP_SPLIT_AUDIO_MODE);
-
-  // If split mode changed, reinitialize audio engine with correct configuration
-  if (NewSplitMode_B != pContext_X->IsAudioSplitMode_B)
-  {
-    pContext_X->IsAudioSplitMode_B = NewSplitMode_B;
-
-    // Clean up old audio engine
-    AudioEngineDestroy(&pContext_X->AudioEngine_X);
-
-    // Reinitialize with new mode
-    AudioEngineInit(&pContext_X->AudioEngine_X, pContext_X->pMultiMediaSource_X, pContext_X->IsAudioSplitMode_B);
-  }
-  // Restore user settings after reinitialization
-  for (i_U32 = 0; i_U32 < PLUGIN_MAX_AUDIO_CHANNELS; i_U32++)
-  {
-    sprintf(pPropName_c, PROP_SINE_ENABLED_FMT, i_U32 + 1);
-    pContext_X->AudioEngine_X.pAudioChannelConfig_X[i_U32].SineEnabled_B = obs_data_get_bool(_pSetting_X, pPropName_c);
-
-    sprintf(pPropName_c, PROP_SINE_FREQUENCY_FMT, i_U32 + 1);
-    pContext_X->AudioEngine_X.pAudioChannelConfig_X[i_U32].SineFrequency_lf = obs_data_get_double(_pSetting_X, pPropName_c);
-
-    sprintf(pPropName_c, PROP_SINE_AMPLITUDE_FMT, i_U32 + 1);
-    pContext_X->AudioEngine_X.pAudioChannelConfig_X[i_U32].SineAmplitude_lf = obs_data_get_double(_pSetting_X, pPropName_c);
-  }
-
-  // 1. Handle Video File Update
-  pPath_c = obs_data_get_string(_pSetting_X, PROP_VIDEO_FILE_PATH);
-  if (pPath_c)
-  {
-    if (pContext_X->pVideoFile_X)
-    {
-      fclose(pContext_X->pVideoFile_X);
-      pContext_X->pVideoFile_X = nullptr;
-    }
-    pContext_X->pVideoFile_X = fopen(pPath_c, "rb");
-    obs_log(LOG_INFO, "Video pSource_X updated to: %s", pPath_c);
-  }
-  else
-  {
-    obs_log(LOG_INFO, "No video file specified, keeping existing source");
-  }
-
-  // 2. Handle Audio File Update
-  pPath_c = obs_data_get_string(_pSetting_X, PROP_AUDIO_FILE_PATH);
-  if (pPath_c)
-  {
-    if (pContext_X->pAudioFile_X)
-    {
-      fclose(pContext_X->pAudioFile_X);
-      pContext_X->pAudioFile_X = nullptr;
-    }
-    pContext_X->pAudioFile_X = fopen(pPath_c, "rb");
-    obs_log(LOG_INFO, "Audio pSource_X updated to: %s", pPath_c);
-  }
-  else
-  {
-    obs_log(LOG_INFO, "No audio file specified, keeping existing source");
-  }
-}
 static void MultiMediaVideoTick(void *_pData, float seconds)
 {
   auto *pContext_X = (MultiMediaSource *)_pData;
   uint32_t NbAudioSampleToGenerate_U32;
   size_t NbAudioSampleRead;
   struct obs_source_audio AudioFrame_X = {0};
-
   auto Now = std::chrono::high_resolution_clock::now();
   pContext_X->DeltaTickInUs = std::chrono::duration_cast<std::chrono::microseconds>(Now - pContext_X->TickIn).count();
   pContext_X->TickIn = std::chrono::high_resolution_clock::now();
   if (pContext_X->pMultiMediaSource_X)
   {
     // 1. Add current frame time to our accumulator
+    pContext_X->VideoFrameAccumulator_lf += (double)seconds;
     pContext_X->AudioEngine_X.AudioRemainderSecond_lf += (double)seconds;
-    pContext_X->VideoFrameAccumulator_lf += (double)seconds; // ← ADD THIS LINE
     // 2. Calculate exactly how many whole samples fit into our accumulated
     NbAudioSampleToGenerate_U32 = (uint32_t)(pContext_X->AudioEngine_X.AudioSampleRate_U32 * pContext_X->AudioEngine_X.AudioRemainderSecond_lf);
 
+      obs_log(LOG_INFO, ">>>MultiMediaVideoTick seconds %f rate %d * AudioRemainderSecond %d NbSamp %d Adj %f", seconds,
+            pContext_X->AudioEngine_X.AudioSampleRate_U32, pContext_X->AudioEngine_X.AudioRemainderSecond_lf, NbAudioSampleToGenerate_U32,
+            ((float)NbAudioSampleToGenerate_U32 / (float)pContext_X->AudioEngine_X.AudioSampleRate_U32));
     // 3. Subtract the time we are actually using from the accumulator
     // This preserves the fractional "leftover" time for the next tick
-    pContext_X->AudioEngine_X.AudioRemainderSecond_lf -= (double)NbAudioSampleToGenerate_U32 / pContext_X->AudioEngine_X.AudioSampleRate_U32;
+      pContext_X->AudioEngine_X.AudioRemainderSecond_lf -= ((float)NbAudioSampleToGenerate_U32 / (float)pContext_X->AudioEngine_X.AudioSampleRate_U32);
 
     int32_t *pSample_S32 = (int32_t *)pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].pAudioChannelBuffer_U8;
 
@@ -714,13 +729,6 @@ static void MultiMediaVideoTick(void *_pData, float seconds)
     }
     pContext_X->TickOut = std::chrono::high_resolution_clock::now();
     pContext_X->TickElapsedTimeInUs = std::chrono::duration_cast<std::chrono::microseconds>(pContext_X->TickOut - pContext_X->TickIn).count();
-    // Only log occasionally to avoid spam
-    static uint32_t log_counter = 0;
-    if (++log_counter % 60 == 0) // Log every 60 frames (~1 second at 60fps)
-    {
-      obs_log(LOG_INFO, ">>>MultiMediaVideoTick Delta %lld Elapsed %lld uS, Samples %u, Remainder %.6f", pContext_X->DeltaTickInUs,
-              pContext_X->TickElapsedTimeInUs, NbAudioSampleToGenerate_U32, pContext_X->AudioEngine_X.AudioRemainderSecond_lf);
-    }
   }
 }
 // This is where we draw
@@ -770,14 +778,19 @@ static void MultiMediaVideoRender(void *_pData, gs_effect_t *_pEffect)
         {
           return;
         }
-        // Read one frame
-        size_t read = fread(pContext_X->pVideoBuffer_U8, 1, pContext_X->VideoFrameSize_U32, pContext_X->pVideoFile_X);
-        // Loop file if EOF
-        if (read < pContext_X->VideoFrameSize_U32)
+        
+        // If not enough data left, loop to beginning
+        if ((pContext_X->VideoFilePos_U64 + pContext_X->VideoFrameSize_U32) > pContext_X->VideoFileSize_U64)
         {
           fseek(pContext_X->pVideoFile_X, 0, SEEK_SET);
-          // obs_log(LOG_INFO, ">>>raw_video_tick %p sz %d not enought", pContext_X->video_file, read);
-          return;
+          pContext_X->VideoFilePos_U64 = 0;
+        }
+        
+        // Read one frame
+        size_t read = fread(pContext_X->pVideoBuffer_U8, 1, pContext_X->VideoFrameSize_U32, pContext_X->pVideoFile_X);
+        if (read > 0)
+        {
+          pContext_X->VideoFilePos_U64 += read;
         }
       }
       else if (pContext_X->VideoSourceType_E == VIDEO_SOURCE_COLOR_BAR) // Color Bar

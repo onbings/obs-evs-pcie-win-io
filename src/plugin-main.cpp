@@ -17,6 +17,138 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 */
 /*
 srt://127.0.0.1:9001?mode=listener&latency=50000
+
+Waveform:
+https://obsproject.com/forum/resources/waveform.1423/  -> https://github.com/phandasm/waveform/releases/tag/v1.8.1
+install in E:\pro\obs-studio\build_x64\rundir\Debug or Release
+
+vst plugin:
+To install VST2 plugins for OBS, the gold standard is the **ReaPlugs** bundle. It’s free, stable, and widely used by streamers because it includes everything
+you need (Equalizer, Compressor, Noise Gate).
+
+Since it is 2026, many plugins are moving to VST3, but OBS still heavily relies on the VST2 format for its native filter. Here is how to get it done correctly:
+
+### 1. Download the correct version
+
+* **Official Link:** [ReaPlugs VST 64-bit](https://www.reaper.fm/reaplugs/)
+* **Crucial:** You **must** download the **64-bit version**. OBS is a 64-bit application and will completely ignore 32-bit plugins.
+
+### 2. The Installation (The "Golden Path")
+
+When you run the installer, it will ask you where to put the `.dll` files. To ensure OBS sees them immediately, do not use the default folder if it points to
+"Program Files (x86)".
+
+**Choose or move the files to this exact path:**
+`C:\Program Files\Common Files\VST2`
+
+> **Tip:** If that folder doesn't exist, create it manually. This is the #1 reason the list in OBS stays empty.
+
+---
+
+### 3. Activate in OBS
+
+1. **Restart OBS** (It only scans for new plugins when it opens).
+2. Go to your **Audio Mixer**.
+3. Click the **three dots (⋮)** on your Mic or Desktop Audio and choose **Filters**.
+4. Add the **VST 2.x Plug-in** filter.
+5. In the dropdown, you should now see a list starting with "reacomp", "reaeq", etc.
+6. Click **Open Plug-in Interface** to see the actual knobs and sliders.
+
+### Recommended Start Order
+
+If you want professional sound, add them in this specific order:
+
+1. **reagate-standalone** (Removes background fan/keyboard noise).
+2. **reaeq-standalone** (Boost the lows for a "radio" voice).
+3. **reacomp-standalone** (Evens out your volume so you don't clip when you shout).
+
+**Would you like me to walk you through the specific settings for the Compressor (reacomp) so your audio stays crystal clear?**
+Great! Now that the plugins are showing up, you have access to one of the most powerful free audio suites available.
+
+The **"-standalone"** suffix simply means these are the versions of the plugins designed to run in any host (like OBS or Audacity), rather than being locked
+inside the Reaper DAW (Digital Audio Workstation) itself.
+
+Here is a breakdown of what each one does and when you should use it:
+
+---
+
+### 1. The "Essential Three" (Start here)
+
+These are the plugins you will use 90% of the time to make your microphone sound professional.
+
+* **reagate-standalone (Noise Gate)**
+* **Usage:** Stops your mic from picking up background noise (keyboard clicks, fans, or breathing) when you aren't talking.
+* **How it works:** It "shuts the gate" on any sound below a certain volume. Once you start talking, the gate opens.
+
+
+* **reaeq-standalone (Equalizer)**
+* **Usage:** Shapes the "tone" of your voice.
+* **How it works:** You can boost the low frequencies to get that deep "radio" voice or boost the highs to make your speech sound clearer (less muffled).
+
+
+* **reacomp-standalone (Compressor)**
+* **Usage:** Keeps your volume consistent.
+* **How it works:** If you suddenly shout or laugh loudly, it automatically lowers the volume so you don't "clip" (distort) or hurt your viewers' ears. It makes
+your quiet whispers and loud shouts stay at a similar level.
+
+
+
+---
+
+### 2. The "Problem Solvers"
+
+Use these when you have specific audio issues to fix.
+
+* **reafir-standalone (Noise Subtraction / Surgical EQ)**
+* **Usage:** The best tool for removing a constant hum or static hiss.
+* **Special Feature:** Use the "Subtract" mode and click "Automatically build noise profile" while staying silent for 5 seconds. It will "learn" the hum of your
+room and delete it from your audio.
+
+
+* **reaxcomp-standalone (Multi-band Compressor)**
+* **Usage:** A more advanced version of the compressor.
+* **How it works:** It allows you to compress different frequencies independently. For example, you can compress only the "harsh" high frequencies of your voice
+without affecting the deep bass.
+
+
+* **readelay-standalone (Delay/Echo)**
+* **Usage:** Adds an echo effect.
+* **How it works:** Mostly for fun or creative effects, but can be used to sync audio if your video is slightly ahead of your sound.
+
+
+
+---
+
+### 3. The "Technical" Tools
+
+These are mostly for routing or advanced MIDI setups.
+
+* **reastream-standalone (Audio Over Network)**
+* **Usage:** Sends audio from one computer to another over your local network (LAN), or from a DAW (like FL Studio) directly into OBS without extra cables.
+
+
+* **reacontrolmidi-standalone (MIDI Control)**
+* **Usage:** Allows you to control MIDI hardware or software parameters. Most OBS users will never need this unless they are doing complex music production.
+
+
+* **reajs (Scriptable FX)**
+* **Usage:** A "host" plugin that lets you load hundreds of tiny, community-made scripts (effects like de-essers, limiters, or distortions).
+
+
+
+---
+
+### Recommended Order (The "Audio Chain")
+
+In OBS, the order of your filters matters because the sound flows from top to bottom. Here is the professional standard:
+
+1. **reafir** (Clean the noise first)
+2. **reagate** (Shut the mic when silent)
+3. **reaeq** (Make the voice sound good)
+4. **reacomp** (Keep the volume steady)
+5. **Limiter** (Built-in OBS filter, as a safety net)
+
+**Would you like me to guide you through setting up `reafir` to remove that background hiss from your room?**
 */
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -102,10 +234,9 @@ struct AudioEngine
 // Structure for individual sine wave audio channels (Option 2)
 struct AudioChannelSource
 {
-  AudioEngine AudioEngine_X;       // Shared audio engine
+  //AudioEngine AudioEngine_X;       // Shared audio engine
   uint32_t AudioChannelNumber_U32; // Channel number (1-16)
 };
-
 struct MultiMediaSource
 {
   obs_source_t *pMultiMediaSource_X; // Obs source pointer
@@ -142,7 +273,7 @@ struct MultiMediaSource
   // Audio members
   FILE *pAudioFile_X;        // Audio file handle
   AudioEngine AudioEngine_X; // Shared audio engine
-  bool IsAudioSplitMode_B;   // Runtime control: true = separate sources, false = multi-channel
+  //bool IsAudioSplitMode_B;   // Runtime control: true = separate sources, false = multi-channel
 
   // Runtime pSource_X selection variables
   int VideoSourceType_E;         // VIDEO_SOURCE_TYPE enum
@@ -177,7 +308,7 @@ static void AudioEngineInit(AudioEngine *_pAudioEngine_X, obs_source_t *_pSource
   _pAudioEngine_X->AudioFrameSize = sizeof(int32_t) * 16 * 1024; // Buffer size per channel
   _pAudioEngine_X->AudioRemainderSecond_lf = 0.0;
   _pAudioEngine_X->IsAudioSplitMode_B = _IsAudioSplitMode_B;
-
+  /*
   if (_IsAudioSplitMode_B)
   {
     // Split mode: allocate buffer only for channel 0 (mono output)
@@ -195,6 +326,7 @@ static void AudioEngineInit(AudioEngine *_pAudioEngine_X, obs_source_t *_pSource
     }
   }
   else
+    */
   {
     // Multi-channel mode: allocate separate buffers for each channel (16-ch interleaved output)
     _pAudioEngine_X->NbAudioChannel_U32 = PLUGIN_MAX_AUDIO_CHANNELS;
@@ -325,15 +457,13 @@ static void MultiMediaUpdate(void *_pData, obs_data_t *_pSetting_X)
   NewSplitMode_B = obs_data_get_bool(_pSetting_X, PROP_SPLIT_AUDIO_MODE);
 
   // If split mode changed, reinitialize audio engine with correct configuration
-  if (NewSplitMode_B != pContext_X->IsAudioSplitMode_B)
+  if (NewSplitMode_B != pContext_X->AudioEngine_X.IsAudioSplitMode_B)
   {
-    pContext_X->IsAudioSplitMode_B = NewSplitMode_B;
-
     // Clean up old audio engine
     AudioEngineDestroy(&pContext_X->AudioEngine_X);
 
     // Reinitialize with new mode
-    AudioEngineInit(&pContext_X->AudioEngine_X, pContext_X->pMultiMediaSource_X, pContext_X->IsAudioSplitMode_B);
+    AudioEngineInit(&pContext_X->AudioEngine_X, pContext_X->pMultiMediaSource_X, NewSplitMode_B);
   }
   // Restore user settings after reinitialization
   for (i_U32 = 0; i_U32 < PLUGIN_MAX_AUDIO_CHANNELS; i_U32++)
@@ -397,13 +527,12 @@ static void *MultiMediaCreate(obs_data_t *_pSetting_X, obs_source_t *_pSource_X)
   obs_log(LOG_INFO, ">>>MultiMediaCreate %p %p", _pSetting_X, _pSource_X);
   pContext_X->pMultiMediaSource_X = _pSource_X;
   // Initialize source selection variables
-  pContext_X->IsAudioSplitMode_B = false; // Default to multi-channel mode
-                                          // Keep in sync with MultiMediaGetDefault
+
   pContext_X->VideoSourceType_E = static_cast<int>(obs_data_get_int(_pSetting_X, PROP_VIDEO_SOURCE_TYPE));
   pContext_X->AudioSourceType_E = static_cast<int>(obs_data_get_int(_pSetting_X, PROP_AUDIO_SOURCE_TYPE));
   pContext_X->IsVideoIn10bit_B = obs_data_get_bool(_pSetting_X, PROP_USE_10BIT_VIDEO);
   pContext_X->IsLineInColorBarMoving_B = obs_data_get_bool(_pSetting_X, PROP_COLOR_BAR_MOVING);
-  pContext_X->IsAudioSplitMode_B = obs_data_get_bool(_pSetting_X, PROP_SPLIT_AUDIO_MODE);
+  //pContext_X->IsAudioSplitMode_B = obs_data_get_bool(_pSetting_X, PROP_SPLIT_AUDIO_MODE);
   pContext_X->VideoFrameAccumulator_lf = 0.0;
   // Hardcoded for your specific use case, or pull from _pSetting_X
   if (pContext_X->IsVideoIn10bit_B)
@@ -440,7 +569,7 @@ static void *MultiMediaCreate(obs_data_t *_pSetting_X, obs_source_t *_pSource_X)
     obs_leave_graphics();
 
   // Initialize audio engine with same mode as context
-  AudioEngineInit(&pContext_X->AudioEngine_X, _pSource_X, pContext_X->IsAudioSplitMode_B);
+    AudioEngineInit(&pContext_X->AudioEngine_X, _pSource_X, true); //pContext_X->IsAudioSplitMode_B);
 
   /*
   p_c = obs_data_get_string(_pSetting_X, "file_path");
@@ -621,8 +750,8 @@ static void MultiMediaGetDefault(obs_data_t *_pSetting_X)
 
   obs_data_set_default_string(_pSetting_X, PROP_VIDEO_FILE_PATH, "C:\\media\\win_io_board\\1920x1080@29.97i_clp_0.yuv10");
   // Audio source defaults: keep in sync with MultiMediaCreate
-  obs_data_set_default_int(_pSetting_X, PROP_AUDIO_SOURCE_TYPE, AUDIO_SOURCE_FILE); // Default to File
-  obs_data_set_default_bool(_pSetting_X, PROP_SPLIT_AUDIO_MODE, false);             // Default to multi-channel mode
+  obs_data_set_default_int(_pSetting_X, PROP_AUDIO_SOURCE_TYPE, AUDIO_SOURCE_SINE_GENERATOR); // AUDIO_SOURCE_FILE); // Default to File
+  obs_data_set_default_bool(_pSetting_X, PROP_SPLIT_AUDIO_MODE, true);   
 
   obs_data_set_default_string(_pSetting_X, PROP_AUDIO_FILE_PATH, "C:\\media\\win_io_board\\16xS24L32@48000_6_0.pcm");
 
@@ -649,86 +778,131 @@ static void MultiMediaVideoTick(void *_pData, float seconds)
   auto Now = std::chrono::high_resolution_clock::now();
   pContext_X->DeltaTickInUs = std::chrono::duration_cast<std::chrono::microseconds>(Now - pContext_X->TickIn).count();
   pContext_X->TickIn = std::chrono::high_resolution_clock::now();
-  if (pContext_X->pMultiMediaSource_X)
+  if (pContext_X->AudioEngine_X.AudioSampleRate_U32)
   {
-    // 1. Add current frame time to our accumulator
-    pContext_X->VideoFrameAccumulator_lf += (double)seconds;
-    pContext_X->AudioEngine_X.AudioRemainderSecond_lf += (double)seconds;
-    // 2. Calculate exactly how many whole samples fit into our accumulated
-    NbAudioSampleToGenerate_U32 = (uint32_t)(pContext_X->AudioEngine_X.AudioSampleRate_U32 * pContext_X->AudioEngine_X.AudioRemainderSecond_lf);
+    if (pContext_X->pMultiMediaSource_X)
+    {
+      // 1. Add current frame time to our accumulator
+      pContext_X->VideoFrameAccumulator_lf += (double)seconds;
+      pContext_X->AudioEngine_X.AudioRemainderSecond_lf += (double)seconds;
+      // 2. Calculate exactly how many whole samples fit into our accumulated
+      NbAudioSampleToGenerate_U32 = (uint32_t)(pContext_X->AudioEngine_X.AudioSampleRate_U32 * pContext_X->AudioEngine_X.AudioRemainderSecond_lf);
 
       obs_log(LOG_INFO, ">>>MultiMediaVideoTick seconds %f rate %d * AudioRemainderSecond %d NbSamp %d Adj %f", seconds,
-            pContext_X->AudioEngine_X.AudioSampleRate_U32, pContext_X->AudioEngine_X.AudioRemainderSecond_lf, NbAudioSampleToGenerate_U32,
-            ((float)NbAudioSampleToGenerate_U32 / (float)pContext_X->AudioEngine_X.AudioSampleRate_U32));
-    // 3. Subtract the time we are actually using from the accumulator
-    // This preserves the fractional "leftover" time for the next tick
+              pContext_X->AudioEngine_X.AudioSampleRate_U32, pContext_X->AudioEngine_X.AudioRemainderSecond_lf, NbAudioSampleToGenerate_U32,
+              ((float)NbAudioSampleToGenerate_U32 / (float)pContext_X->AudioEngine_X.AudioSampleRate_U32));
+      // 3. Subtract the time we are actually using from the accumulator
+      // This preserves the fractional "leftover" time for the next tick
       pContext_X->AudioEngine_X.AudioRemainderSecond_lf -= ((float)NbAudioSampleToGenerate_U32 / (float)pContext_X->AudioEngine_X.AudioSampleRate_U32);
 
-    int32_t *pSample_S32 = (int32_t *)pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].pAudioChannelBuffer_U8;
+      int32_t *pSample_S32 = (int32_t *)pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].pAudioChannelBuffer_U8;
 
-    if (pContext_X->AudioSourceType_E == AUDIO_SOURCE_BOARD) // Board
-    {
-      // TODO: Implement board audio capture
-      // For now, output silence
-      memset(pSample_S32, 0, NbAudioSampleToGenerate_U32 * pContext_X->AudioEngine_X.NbAudioChannel_U32 * sizeof(int32_t));
-    }
-    else if (pContext_X->AudioSourceType_E == AUDIO_SOURCE_SINE_GENERATOR) // Sine Generator
-    {
-      if (pContext_X->IsAudioSplitMode_B)
+      if (pContext_X->AudioSourceType_E == AUDIO_SOURCE_BOARD) // Board
       {
-        // Option 2: Individual channels are handled by separate sources
-        // This main source only generates a simple test tone using channel 0 configuration
-        GenerateAudioSinusData(pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SineFrequency_lf,
-                               pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SineAmplitude_lf * 0x7FFFFFFF,
-                               (double)pContext_X->AudioEngine_X.AudioSampleRate_U32, NbAudioSampleToGenerate_U32, pSample_S32,
-                               pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SinePhase_lf);
-
-        // Output single test audio
-        struct obs_source_audio AudioFrame_X = {0};
-        AudioFrame_X.data[0] = pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].pAudioChannelBuffer_U8;
-        AudioFrame_X.frames = NbAudioSampleToGenerate_U32;
-        AudioFrame_X.speakers = SPEAKERS_MONO;
-        AudioFrame_X.samples_per_sec = pContext_X->AudioEngine_X.AudioSampleRate_U32;
-        AudioFrame_X.format = AUDIO_FORMAT_32BIT;
-        AudioFrame_X.timestamp =
-            obs_get_video_frame_time() - util_mul_div64(NbAudioSampleToGenerate_U32, 1000000000ULL, pContext_X->AudioEngine_X.AudioSampleRate_U32);
-        obs_source_output_audio(pContext_X->pMultiMediaSource_X, &AudioFrame_X);
+        // TODO: Implement board audio capture
+        // For now, output silence
+        memset(pSample_S32, 0, NbAudioSampleToGenerate_U32 * pContext_X->AudioEngine_X.NbAudioChannel_U32 * sizeof(int32_t));
       }
-      else
+      else if (pContext_X->AudioSourceType_E == AUDIO_SOURCE_SINE_GENERATOR) // Sine Generator
       {
-        // Option 3: Generate proper 16-channel interleaved audio using AudioEngine
-        AudioEngineGenerateAudio(&pContext_X->AudioEngine_X, NbAudioSampleToGenerate_U32);
-        AudioEngineOutputAudio(&pContext_X->AudioEngine_X, NbAudioSampleToGenerate_U32);
-      }
-    }
-    else if (pContext_X->AudioSourceType_E == AUDIO_SOURCE_FILE) // File
-    {
-      // --- FILE READING ---
-      if (pContext_X->pAudioFile_X)
-      {
-        // 1. Read the mono samples
-        NbAudioSampleRead = fread(pSample_S32, sizeof(int32_t), NbAudioSampleToGenerate_U32, pContext_X->pAudioFile_X);
-
-        // Handle Looping
-        if (NbAudioSampleRead < NbAudioSampleToGenerate_U32)
+        if (pContext_X->AudioEngine_X.IsAudioSplitMode_B)
         {
-          fseek(pContext_X->pAudioFile_X, 0, SEEK_SET);
-          fread(pSample_S32 + NbAudioSampleRead, sizeof(int32_t), NbAudioSampleToGenerate_U32 - NbAudioSampleRead, pContext_X->pAudioFile_X);
-        }
+          // 1. Generate Data for Channel 0 (LEFT)
+          GenerateAudioSinusData(pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SineFrequency_lf,
+                                 pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SineAmplitude_lf * 0x7FFFFFFF,
+                                 (double)pContext_X->AudioEngine_X.AudioSampleRate_U32, NbAudioSampleToGenerate_U32,
+                                 pSample_S32, // Assuming this writes to config[0].pAudioChannelBuffer_U8
+                                 pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SinePhase_lf);
 
-        // Output file-based audio
-        AudioFrame_X.data[0] = pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].pAudioChannelBuffer_U8;
-        AudioFrame_X.frames = NbAudioSampleToGenerate_U32;
-        AudioFrame_X.speakers = SPEAKERS_MONO;
-        AudioFrame_X.samples_per_sec = pContext_X->AudioEngine_X.AudioSampleRate_U32;
-        AudioFrame_X.format = AUDIO_FORMAT_32BIT;
-        AudioFrame_X.timestamp =
-            obs_get_video_frame_time() - util_mul_div64(NbAudioSampleToGenerate_U32, 1000000000ULL, pContext_X->AudioEngine_X.AudioSampleRate_U32);
-        obs_source_output_audio(pContext_X->pMultiMediaSource_X, &AudioFrame_X);
+          // 2. Generate Data for Channel 1 (RIGHT)
+          int32_t *pSample2_S32 = (int32_t *)pContext_X->AudioEngine_X.pAudioChannelConfig_X[1].pAudioChannelBuffer_U8;
+
+          // Note: Ensure pAudioChannelConfig_X[1] has its own allocated buffer!
+          GenerateAudioSinusData(pContext_X->AudioEngine_X.pAudioChannelConfig_X[1].SineFrequency_lf,
+                                 pContext_X->AudioEngine_X.pAudioChannelConfig_X[1].SineAmplitude_lf * 0x7FFFFFFF,
+                                 (double)pContext_X->AudioEngine_X.AudioSampleRate_U32, NbAudioSampleToGenerate_U32,
+                                 pSample2_S32, // Point this to your second channel's buffer
+                                 pContext_X->AudioEngine_X.pAudioChannelConfig_X[1].SinePhase_lf);
+
+          // 3. Configure the Stereo Audio Frame
+          struct obs_source_audio AudioFrame_X = {0};
+
+          // OBS uses Planar audio for AUDIO_FORMAT_32BIT.
+          // data[0] is Left, data[1] is Right.
+          AudioFrame_X.data[0] = pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].pAudioChannelBuffer_U8;
+          AudioFrame_X.data[1] = pContext_X->AudioEngine_X.pAudioChannelConfig_X[1].pAudioChannelBuffer_U8;
+
+          AudioFrame_X.frames = NbAudioSampleToGenerate_U32;
+          AudioFrame_X.speakers = SPEAKERS_STEREO; // Change from MONO to STEREO
+          //AudioFrame_X.speakers = SPEAKERS_MONO; // Change from MONO to STEREO
+          AudioFrame_X.samples_per_sec = pContext_X->AudioEngine_X.AudioSampleRate_U32;
+          AudioFrame_X.format = AUDIO_FORMAT_32BIT_PLANAR;          //AUDIO_FORMAT_32BIT;
+
+          // Timestamp logic remains the same
+          AudioFrame_X.timestamp =
+              obs_get_video_frame_time() - util_mul_div64(NbAudioSampleToGenerate_U32, 1000000000ULL, pContext_X->AudioEngine_X.AudioSampleRate_U32);
+
+          // Output to OBS
+          obs_source_output_audio(pContext_X->pMultiMediaSource_X, &AudioFrame_X);
+        }
+        /*
+        if (pContext_X->AudioEngine_X.IsAudioSplitMode_B)
+        {
+          // Option 2: Individual channels are handled by separate sources
+          // This main source only generates a simple test tone using channel 0 configuration
+          GenerateAudioSinusData(pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SineFrequency_lf,
+                                 pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SineAmplitude_lf * 0x7FFFFFFF,
+                                 (double)pContext_X->AudioEngine_X.AudioSampleRate_U32, NbAudioSampleToGenerate_U32, pSample_S32,
+                                 pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SinePhase_lf);
+
+          // Output single test audio
+          struct obs_source_audio AudioFrame_X = {0};
+          AudioFrame_X.data[0] = pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].pAudioChannelBuffer_U8;
+          AudioFrame_X.frames = NbAudioSampleToGenerate_U32;
+          AudioFrame_X.speakers = SPEAKERS_MONO;
+          AudioFrame_X.samples_per_sec = pContext_X->AudioEngine_X.AudioSampleRate_U32;
+          AudioFrame_X.format = AUDIO_FORMAT_32BIT;
+          AudioFrame_X.timestamp =
+              obs_get_video_frame_time() - util_mul_div64(NbAudioSampleToGenerate_U32, 1000000000ULL, pContext_X->AudioEngine_X.AudioSampleRate_U32);
+          obs_source_output_audio(pContext_X->pMultiMediaSource_X, &AudioFrame_X);
+        }
+        */
+        else
+        {
+          // Option 3: Generate proper 16-channel interleaved audio using AudioEngine
+          AudioEngineGenerateAudio(&pContext_X->AudioEngine_X, NbAudioSampleToGenerate_U32);
+          AudioEngineOutputAudio(&pContext_X->AudioEngine_X, NbAudioSampleToGenerate_U32);
+        }
       }
+      else if (pContext_X->AudioSourceType_E == AUDIO_SOURCE_FILE) // File
+      {
+        // --- FILE READING ---
+        if (pContext_X->pAudioFile_X)
+        {
+          // 1. Read the mono samples
+          NbAudioSampleRead = fread(pSample_S32, sizeof(int32_t), NbAudioSampleToGenerate_U32, pContext_X->pAudioFile_X);
+
+          // Handle Looping
+          if (NbAudioSampleRead < NbAudioSampleToGenerate_U32)
+          {
+            fseek(pContext_X->pAudioFile_X, 0, SEEK_SET);
+            fread(pSample_S32 + NbAudioSampleRead, sizeof(int32_t), NbAudioSampleToGenerate_U32 - NbAudioSampleRead, pContext_X->pAudioFile_X);
+          }
+
+          // Output file-based audio
+          AudioFrame_X.data[0] = pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].pAudioChannelBuffer_U8;
+          AudioFrame_X.frames = NbAudioSampleToGenerate_U32;
+          AudioFrame_X.speakers = SPEAKERS_MONO;
+          AudioFrame_X.samples_per_sec = pContext_X->AudioEngine_X.AudioSampleRate_U32;
+          AudioFrame_X.format = AUDIO_FORMAT_32BIT;
+          AudioFrame_X.timestamp =
+              obs_get_video_frame_time() - util_mul_div64(NbAudioSampleToGenerate_U32, 1000000000ULL, pContext_X->AudioEngine_X.AudioSampleRate_U32);
+          obs_source_output_audio(pContext_X->pMultiMediaSource_X, &AudioFrame_X);
+        }
+      }
+      pContext_X->TickOut = std::chrono::high_resolution_clock::now();
+      pContext_X->TickElapsedTimeInUs = std::chrono::duration_cast<std::chrono::microseconds>(pContext_X->TickOut - pContext_X->TickIn).count();
     }
-    pContext_X->TickOut = std::chrono::high_resolution_clock::now();
-    pContext_X->TickElapsedTimeInUs = std::chrono::duration_cast<std::chrono::microseconds>(pContext_X->TickOut - pContext_X->TickIn).count();
   }
 }
 // This is where we draw
@@ -878,10 +1052,10 @@ static const char *AudioChannel_get_name(void *type_data)
 static void *AudioChannel_create(obs_data_t *_pSetting_X, obs_source_t *pSource_X)
 {
   AudioChannelSource *pContext_X = (AudioChannelSource *)bzalloc(sizeof(AudioChannelSource));
-
+  static uint32_t S_ChannelNumber_U32 = 0;
   // Initialize audio engine for split audio mode (mono output)
-  AudioEngineInit(&pContext_X->AudioEngine_X, pSource_X, true);
-  pContext_X->AudioChannelNumber_U32 = 1; // Will be set during registration
+  //AudioEngineInit(&pContext_X->AudioEngine_X, pSource_X, true);
+  pContext_X->AudioChannelNumber_U32 = S_ChannelNumber_U32++;
 
   return pContext_X;
 }
@@ -891,7 +1065,7 @@ static void AudioChannel_destroy(void *_pData)
   AudioChannelSource *pContext_X = (AudioChannelSource *)_pData;
 
   // Clean up audio engine
-  AudioEngineDestroy(&pContext_X->AudioEngine_X);
+  //AudioEngineDestroy(&pContext_X->AudioEngine_X);
 
   bfree(pContext_X);
   pContext_X = nullptr;
@@ -918,16 +1092,17 @@ static void AudioChannel_get_defaults(obs_data_t *_pSetting_X)
 static void AudioChannel_update(void *_pData, obs_data_t *_pSetting_X)
 {
   AudioChannelSource *pContext_X = (AudioChannelSource *)_pData;
-
+  /*
   pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SineEnabled_B = obs_data_get_bool(_pSetting_X, PROP_ENABLED);
   pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SineFrequency_lf = obs_data_get_double(_pSetting_X, PROP_FREQUENCY);
   pContext_X->AudioEngine_X.pAudioChannelConfig_X[0].SineAmplitude_lf = obs_data_get_double(_pSetting_X, PROP_AMPLITUDE);
+  */
 }
 
 static void AudioChannel_tick(void *_pData, float seconds)
 {
   AudioChannelSource *pContext_X = (AudioChannelSource *)_pData;
-  AudioEngine *engine = &pContext_X->AudioEngine_X;
+  /* AudioEngine *engine = &pContext_X->AudioEngine_X;
 
   if (!engine->pAudioSource_X || !engine->pAudioChannelConfig_X[0].SineEnabled_B)
   {
@@ -948,6 +1123,7 @@ static void AudioChannel_tick(void *_pData, float seconds)
     AudioEngineGenerateAudio(engine, NbAudioSampleToGenerate_U32);
     AudioEngineOutputAudio(engine, NbAudioSampleToGenerate_U32);
   }
+  */
 }
 
 // Static name functions for each channel
@@ -1155,7 +1331,7 @@ bool obs_module_load(void)
 {
   bool Rts_B = false;
   WSADATA wsa;
-  // uint32_t i_U32;
+  uint32_t i_U32;
 
   obs_log(LOG_INFO, "Plugin loaded successfully (version %s)", PLUGIN_VERSION);
 
@@ -1204,7 +1380,7 @@ gs_stage_texture(): Used to move the frame data from the GPU to the CPU if you n
   obs_register_source(&MultiMedia_source_info);
 
   // Always register 16 separate sine channel sources for Option 2
-#if 0
+//#if 0
   obs_log(LOG_INFO, "Registering 16 individual sine channel sources");
   InitializeAudioChannelSource();
   for (i_U32 = 0; i_U32 < PLUGIN_MAX_AUDIO_CHANNELS; i_U32++)
@@ -1213,7 +1389,7 @@ gs_stage_texture(): Used to move the frame data from the GPU to the CPU if you n
     obs_log(LOG_INFO, "Registered sine channel %d", i_U32 + 1);
   }
   obs_log(LOG_INFO, "Both audio modes available - use 'Split Audio Mode' property to switch");
-#endif
+//#endif
   // obs_register_source(&udp_stream_filter_info);
   // obs_register_output(&raw_dump_info);
   //  Add a button to the Tools menu
